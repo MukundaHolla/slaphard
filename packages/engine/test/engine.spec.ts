@@ -70,6 +70,7 @@ describe('engine', () => {
     expect(result.state.slapWindow.active).toBe(true);
     expect(result.state.slapWindow.reason).toBe('ACTION');
     expect(result.state.slapWindow.actionCard).toBe('GORILLA');
+    expect(result.state.slapWindow.slapWindowMs).toBe(3200);
   });
 
   it('applies immediate wrong-gesture penalty', () => {

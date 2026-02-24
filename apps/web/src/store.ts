@@ -15,6 +15,7 @@ interface UiState {
   roomCodeInput: string;
   selectedGesture: Gesture | undefined;
   submittedSlapEventId: string | undefined;
+  feedCollapsed: boolean;
 }
 
 interface AppState {
@@ -37,6 +38,7 @@ interface AppState {
   setSelectedGesture: (gesture?: Gesture) => void;
   markSlapSubmitted: (eventId: string) => void;
   clearSlapSubmission: () => void;
+  setFeedCollapsed: (collapsed: boolean) => void;
   pushFeed: (message: string) => void;
   clearRoom: () => void;
   nextClientSeq: () => number;
@@ -46,6 +48,31 @@ interface AppState {
 const localDisplayNameKey = 'slaphard.displayName';
 const localUserKey = 'slaphard.userId';
 const localRoomCodeKey = 'slaphard.roomCode';
+const localFeedCollapsedKey = 'slaphard.feedCollapsed';
+
+const safeLocalStorageGet = (key: string): string | null => {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+
+const safeLocalStorageSet = (key: string, value: string): void => {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Ignore persistence failures (Safari private mode / storage restrictions).
+  }
+};
+
+const safeLocalStorageRemove = (key: string): void => {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // Ignore persistence failures (Safari private mode / storage restrictions).
+  }
+};
 
 const average = (previous: number, next: number, alpha = 0.2): number =>
   previous === 0 ? next : previous * (1 - alpha) + next * alpha;
@@ -55,9 +82,9 @@ export const getPersistedIdentity = (): {
   roomCode: string | undefined;
   displayName: string | undefined;
 } => ({
-  userId: localStorage.getItem(localUserKey) ?? undefined,
-  roomCode: localStorage.getItem(localRoomCodeKey) ?? undefined,
-  displayName: localStorage.getItem(localDisplayNameKey) ?? undefined,
+  userId: safeLocalStorageGet(localUserKey) ?? undefined,
+  roomCode: safeLocalStorageGet(localRoomCodeKey) ?? undefined,
+  displayName: safeLocalStorageGet(localDisplayNameKey) ?? undefined,
 });
 
 export const persistIdentity = ({
@@ -70,18 +97,26 @@ export const persistIdentity = ({
   displayName: string | undefined;
 }): void => {
   if (userId) {
-    localStorage.setItem(localUserKey, userId);
+    safeLocalStorageSet(localUserKey, userId);
   }
   if (roomCode) {
-    localStorage.setItem(localRoomCodeKey, roomCode);
+    safeLocalStorageSet(localRoomCodeKey, roomCode);
   }
   if (displayName) {
-    localStorage.setItem(localDisplayNameKey, displayName);
+    safeLocalStorageSet(localDisplayNameKey, displayName);
   }
 };
 
 export const clearPersistedRoom = (): void => {
-  localStorage.removeItem(localRoomCodeKey);
+  safeLocalStorageRemove(localRoomCodeKey);
+};
+
+const persistedFeedCollapsed = (): boolean => {
+  const value = safeLocalStorageGet(localFeedCollapsedKey);
+  if (value === null) {
+    return true;
+  }
+  return value === 'true';
 };
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -103,6 +138,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     roomCodeInput: '',
     selectedGesture: undefined,
     submittedSlapEventId: undefined,
+    feedCollapsed: persistedFeedCollapsed(),
   },
 
   setSocketStatus: (socketStatus) => set({ socketStatus }),
@@ -136,6 +172,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   clearSlapSubmission: () =>
     set((state) => ({ ui: { ...state.ui, submittedSlapEventId: undefined, selectedGesture: undefined } })),
 
+  setFeedCollapsed: (feedCollapsed) => {
+    safeLocalStorageSet(localFeedCollapsedKey, String(feedCollapsed));
+    set((state) => ({ ui: { ...state.ui, feedCollapsed } }));
+  },
+
   pushFeed: (message) =>
     set((state) => ({
       feed: [message, ...state.feed].slice(0, 24),
@@ -143,7 +184,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   clearRoom: () => {
     clearPersistedRoom();
-    set({
+    set((state) => ({
       roomState: undefined,
       gameState: undefined,
       persistedRoomCode: undefined,
@@ -151,9 +192,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         roomCodeInput: '',
         selectedGesture: undefined,
         submittedSlapEventId: undefined,
+        feedCollapsed: state.ui.feedCollapsed,
       },
       feed: [],
-    });
+    }));
   },
 
   nextClientSeq: () => {

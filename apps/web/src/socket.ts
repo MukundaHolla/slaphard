@@ -7,6 +7,7 @@ import {
   type ServerEventName,
   type ServerEventPayload,
 } from '@slaphard/shared';
+import { playPenaltySound } from './audio';
 import { useAppStore } from './store';
 
 const serverUrl = import.meta.env.VITE_SERVER_URL ?? 'http://localhost:3001';
@@ -102,6 +103,7 @@ export const createSocketApi = (): SocketApi => {
     if (!data) {
       return;
     }
+    playPenaltySound();
     useAppStore.getState().pushFeed(`penalty: ${data.type} on ${data.userId.slice(0, 6)}`);
   });
 

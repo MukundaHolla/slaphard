@@ -246,13 +246,15 @@ export const applyEvent = (state: GameState, event: EngineEvent, nowServerTime: 
       next.nextSlapEventNonce += 1;
 
       const reason = shouldOpenForMatch ? ('MATCH' as const) : ('ACTION' as const);
+      const slapWindowMs =
+        reason === 'ACTION' ? next.config.actionSlapWindowMs : next.config.slapWindowMs;
       const nextSlapWindowBase = {
         active: true,
         eventId,
         reason,
         startServerTime: nowServerTime,
-        deadlineServerTime: nowServerTime + next.config.slapWindowMs,
-        slapWindowMs: next.config.slapWindowMs,
+        deadlineServerTime: nowServerTime + slapWindowMs,
+        slapWindowMs,
         flipperSeat: next.currentTurnSeat,
         receivedSlapsCount: 0,
         attempts: [],

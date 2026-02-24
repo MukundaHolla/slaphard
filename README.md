@@ -11,19 +11,29 @@ Web multiplayer reflex card game scaffolded as a pnpm monorepo.
 
 ## Quick Start
 
-1. Install dependencies:
+1. Run local Redis and Postgres.
+
+2. Copy `.env.example` to `.env` and adjust credentials.
+
+3. Install dependencies:
 
 ```bash
 pnpm install
 ```
 
-2. Run web + server:
+4. Run DB migrations:
+
+```bash
+pnpm --filter @slaphard/server db:migrate
+```
+
+5. Run web + server:
 
 ```bash
 pnpm dev
 ```
 
-3. Run engine tests:
+6. Run tests:
 
 ```bash
 pnpm test
@@ -32,11 +42,15 @@ pnpm test
 ## Server Environment
 
 - `PORT` (default `3001`)
-- `REDIS_URL` (optional in Phase 1; if absent, in-memory room store is used)
+- `REDIS_URL` (required by default; set `ALLOW_IN_MEMORY_ROOM_STORE=true` only for fallback mode)
+- `DATABASE_URL` (required when `ENABLE_DB_PERSISTENCE=true`)
+- `ENABLE_DB_PERSISTENCE` (default `true`)
+- `ALLOW_IN_MEMORY_ROOM_STORE` (default `false`)
 
 ## Notes
 
 - Game logic is server-authoritative and implemented in `packages/engine`.
 - Socket payloads are validated with shared Zod contracts on both client and server.
 - Client gets full hand only for the current player (`meHand`); other players receive counts only.
-- Postgres is scaffolded for future stats/accounts in `apps/server/src/db/postgres.ts`.
+- Redis stores live room state and timers.
+- Postgres stores room/match persistence snapshots on key transitions.

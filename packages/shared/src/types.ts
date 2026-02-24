@@ -12,6 +12,7 @@ export type RoomStatus = GameStatus;
 
 export interface GameConfig {
   slapWindowMs: number;
+  actionSlapWindowMs: number;
   turnTimeoutMs: number;
   minHumanMs: number;
 }

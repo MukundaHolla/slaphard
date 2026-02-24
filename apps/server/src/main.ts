@@ -2,6 +2,8 @@ import Fastify from 'fastify';
 import Redis from 'ioredis';
 import { Server as SocketIOServer } from 'socket.io';
 import { config } from './config';
+import { closeDbPool } from './db/client';
+import { NoopPersistenceRepository, PostgresPersistenceRepository } from './db/postgres';
 import { logger } from './logger';
 import { GameService } from './service/game-service';
 import { InMemoryRoomStore } from './store/in-memory-room-store';
@@ -12,7 +14,10 @@ const app = Fastify({ loggerInstance: logger });
 
 const roomStore = (() => {
   if (!config.redisUrl) {
-    logger.warn('REDIS_URL missing, using in-memory room store');
+    if (!config.allowInMemoryRoomStore) {
+      throw new Error('REDIS_URL is required unless ALLOW_IN_MEMORY_ROOM_STORE=true');
+    }
+    logger.warn('REDIS_URL missing, using in-memory room store (fallback mode)');
     return new InMemoryRoomStore();
   }
 
@@ -23,6 +28,19 @@ const roomStore = (() => {
   return new RedisRoomStore(redis);
 })();
 
+const persistenceRepo = (() => {
+  if (!config.enableDbPersistence) {
+    logger.warn('DB persistence disabled (ENABLE_DB_PERSISTENCE=false)');
+    return new NoopPersistenceRepository();
+  }
+
+  if (!config.databaseUrl) {
+    throw new Error('DATABASE_URL is required when ENABLE_DB_PERSISTENCE=true');
+  }
+
+  return new PostgresPersistenceRepository();
+})();
+
 const io = new SocketIOServer(app.server, {
   cors: {
     origin: '*',
@@ -30,7 +48,7 @@ const io = new SocketIOServer(app.server, {
   },
 });
 
-const gameService = new GameService(io, roomStore, logger);
+const gameService = new GameService(io, roomStore, persistenceRepo, logger);
 attachSocketHandlers(io, gameService, logger);
 
 app.get('/health', async () => ({ ok: true, now: Date.now() }));
@@ -45,5 +63,17 @@ const start = async (): Promise<void> => {
     process.exit(1);
   }
 };
+
+const shutdown = async (): Promise<void> => {
+  await closeDbPool();
+  await app.close();
+};
+
+process.on('SIGINT', () => {
+  void shutdown().finally(() => process.exit(0));
+});
+process.on('SIGTERM', () => {
+  void shutdown().finally(() => process.exit(0));
+});
 
 void start();

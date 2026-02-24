@@ -1,4 +1,5 @@
 import {
+  ACTION_SLAP_WINDOW_MS,
   CHANT_ORDER,
   MIN_HUMAN_MS,
   SLAP_WINDOW_MS,
@@ -52,6 +53,7 @@ export const createInitialState = (config: CreateInitialStateConfig): GameState 
     nextSlapEventNonce: 1,
     config: {
       slapWindowMs: config.slapWindowMs ?? SLAP_WINDOW_MS,
+      actionSlapWindowMs: config.actionSlapWindowMs ?? ACTION_SLAP_WINDOW_MS,
       turnTimeoutMs: config.turnTimeoutMs ?? TURN_TIMEOUT_MS,
       minHumanMs: config.minHumanMs ?? MIN_HUMAN_MS,
     },

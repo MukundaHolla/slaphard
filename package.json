@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "pnpm -r --parallel dev",
     "build": "pnpm -r build",
-    "test": "pnpm --filter @slaphard/engine test",
+    "test": "pnpm --filter @slaphard/engine test && pnpm --filter @slaphard/server test",
     "lint": "pnpm -r lint",
     "format": "pnpm -r format"
   },

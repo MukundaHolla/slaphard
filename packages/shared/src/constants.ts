@@ -5,6 +5,7 @@ export const CHANT_ORDER = [...NORMAL_CARDS] as const;
 
 export const TURN_TIMEOUT_MS = 5000;
 export const SLAP_WINDOW_MS = 2000;
+export const ACTION_SLAP_WINDOW_MS = 3200;
 export const MIN_HUMAN_MS = 60;
 export const ROOM_TTL_SECONDS = 3600;
 export const PING_INTERVAL_IN_GAME_MS = 2000;

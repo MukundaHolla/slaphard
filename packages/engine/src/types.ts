@@ -72,6 +72,7 @@ export interface CreateInitialStateConfig {
   shuffle?: boolean;
   nowServerTime: number;
   slapWindowMs?: number;
+  actionSlapWindowMs?: number;
   turnTimeoutMs?: number;
   minHumanMs?: number;
 }

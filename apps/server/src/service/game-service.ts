@@ -12,6 +12,7 @@ import type { EngineEffect, EngineEvent } from '@slaphard/engine';
 import type { Logger } from 'pino';
 import type { Server, Socket } from 'socket.io';
 import { v4 as uuidv4 } from 'uuid';
+import type { MatchEventType, MatchSummary, PersistenceRepository, RoomTransitionType } from '../db/types';
 import type { RoomStore } from '../store/room-store';
 
 interface SocketContext {
@@ -51,10 +52,12 @@ export class GameService {
   private readonly socketsByUserId = new Map<string, Set<string>>();
   private readonly timersByRoomId = new Map<string, RoomTimers>();
   private readonly lastInputAtBySocketId = new Map<string, number>();
+  private readonly activeMatchByRoomId = new Map<string, string>();
 
   constructor(
     private readonly io: Server,
     private readonly roomStore: RoomStore,
+    private readonly persistenceRepo: PersistenceRepository,
     private readonly logger: Logger,
   ) {}
 
@@ -89,6 +92,7 @@ export class GameService {
     };
 
     await this.roomStore.saveRoom(room);
+    await this.persistRoomTransition(room, 'CREATE', { userId });
     await this.attachSocket(socket, room, userId);
     await this.emitRoomState(room);
   }
@@ -147,6 +151,7 @@ export class GameService {
     room.updatedAt = now;
     room.version += 1;
     await this.roomStore.saveRoom(room);
+    await this.persistRoomTransition(room, 'JOIN', { userId });
     await this.attachSocket(socket, room, userId);
 
     await this.emitRoomState(room);
@@ -185,7 +190,15 @@ export class GameService {
       }
 
       if (room.players.length === 0) {
+        await this.persistRoomTransition(room, 'DELETE', { userId: ctx.userId });
+        await this.persistWithRetry(
+          async () => {
+            await this.persistenceRepo.markRoomDeleted(room.roomId, new Date());
+          },
+          { roomId: room.roomId, userId: ctx.userId, action: 'markRoomDeleted' },
+        );
         await this.roomStore.deleteRoom(room.roomId);
+        this.activeMatchByRoomId.delete(room.roomId);
         this.clearTimers(room.roomId);
         return;
       }
@@ -203,6 +216,7 @@ export class GameService {
     room.updatedAt = Date.now();
     room.version += 1;
     await this.roomStore.saveRoom(room);
+    await this.persistRoomTransition(room, 'LEAVE', { userId: ctx.userId });
     await this.emitRoomState(room);
     await this.emitGameState(room);
   }
@@ -259,6 +273,14 @@ export class GameService {
     room.version += 1;
 
     await this.roomStore.saveRoom(room);
+    await this.persistRoomTransition(room, 'START', { userId });
+    const matchId = await this.persistWithRetry(
+      () => this.persistenceRepo.startMatch(room.roomId, new Date(now)),
+      { roomId: room.roomId, userId, action: 'startMatch' },
+    );
+    if (matchId) {
+      this.activeMatchByRoomId.set(room.roomId, matchId);
+    }
     await this.emitRoomState(room);
     await this.emitGameState(room);
     this.rescheduleTimers(room);
@@ -292,6 +314,10 @@ export class GameService {
       throw new ServiceError('NOT_HOST', 'only host can stop the game');
     }
 
+    if (room.status === 'IN_GAME') {
+      await this.finishPersistedMatch(room, 'GAME_STOPPED');
+    }
+
     room.status = 'LOBBY';
     room.gameState = undefined;
     room.players.forEach((player) => {
@@ -301,6 +327,7 @@ export class GameService {
     room.version += 1;
 
     await this.roomStore.saveRoom(room);
+    await this.persistRoomTransition(room, 'STOP', { userId });
     this.clearTimers(room.roomId);
     await this.emitRoomState(room);
   }
@@ -379,6 +406,9 @@ export class GameService {
     room.updatedAt = Date.now();
     room.version += 1;
     await this.roomStore.saveRoom(room);
+    if (room.status === 'IN_GAME') {
+      await this.persistRoomTransition(room, 'LEAVE', { userId: ctx.userId });
+    }
     await this.emitRoomState(room);
     await this.emitGameState(room);
   }
@@ -422,6 +452,7 @@ export class GameService {
       }
 
       if (effect.type === 'SLAP_RESULT') {
+        await this.appendMatchEvent(room.roomId, 'SLAP_RESULT', effect);
         this.emitRoomBroadcast(room.roomId, 'v1:game.slapResult', {
           eventId: effect.eventId,
           orderedUserIds: effect.orderedUserIds,
@@ -431,12 +462,25 @@ export class GameService {
       }
 
       if (effect.type === 'PENALTY') {
+        await this.appendMatchEvent(
+          room.roomId,
+          effect.penaltyType === 'TURN_TIMEOUT' ? 'TIMEOUT' : 'PENALTY',
+          effect,
+        );
         this.emitRoomBroadcast(room.roomId, 'v1:penalty', {
           userId: effect.userId,
           type: effect.penaltyType,
           pileTaken: effect.pileTaken,
         });
       }
+    }
+
+    if (room.status === 'FINISHED') {
+      await this.persistRoomTransition(room, 'FINISH');
+      await this.appendMatchEvent(room.roomId, 'WIN', {
+        winnerUserId: room.gameState?.winnerUserId ?? null,
+      });
+      await this.finishPersistedMatch(room, 'GAME_FINISHED');
     }
 
     await this.emitGameState(room);
@@ -637,6 +681,84 @@ export class GameService {
 
     this.logger.error({ error }, 'unexpected game service failure');
     this.emitError(socket, 'INTERNAL_ERROR', 'unexpected server error');
+  }
+
+  private buildMatchSummary(room: RoomState, reason: string): MatchSummary {
+    return {
+      roomCode: room.roomCode,
+      reason,
+      players: (room.gameState?.players ?? []).map((player) => ({
+        userId: player.userId,
+        displayName: player.displayName,
+        seatIndex: player.seatIndex,
+        handCount: player.hand.length,
+      })),
+    };
+  }
+
+  private async finishPersistedMatch(room: RoomState, reason: string): Promise<void> {
+    const matchId = this.activeMatchByRoomId.get(room.roomId);
+    if (!matchId) {
+      return;
+    }
+
+    await this.persistWithRetry(
+      async () => {
+        await this.persistenceRepo.finishMatch(
+          matchId,
+          room.gameState?.winnerUserId ?? null,
+          this.buildMatchSummary(room, reason),
+          new Date(),
+        );
+      },
+      { roomId: room.roomId, action: 'finishMatch' },
+    );
+
+    this.activeMatchByRoomId.delete(room.roomId);
+  }
+
+  private async appendMatchEvent(roomId: string, eventType: MatchEventType, payload: unknown): Promise<void> {
+    const matchId = this.activeMatchByRoomId.get(roomId);
+    if (!matchId) {
+      return;
+    }
+
+    await this.persistWithRetry(
+      async () => {
+        await this.persistenceRepo.appendMatchEvent(matchId, eventType, payload);
+      },
+      { roomId, matchId, action: 'appendMatchEvent', eventType },
+    );
+  }
+
+  private async persistRoomTransition(
+    room: RoomState,
+    transitionType: RoomTransitionType,
+    extraContext?: Record<string, unknown>,
+  ): Promise<void> {
+    await this.persistWithRetry(
+      async () => {
+        await this.persistenceRepo.writeRoomSnapshot(room, transitionType);
+      },
+      { roomId: room.roomId, transitionType, ...extraContext, action: 'writeRoomSnapshot' },
+    );
+  }
+
+  private async persistWithRetry<T>(
+    fn: () => Promise<T>,
+    context: Record<string, unknown>,
+  ): Promise<T | undefined> {
+    try {
+      return await fn();
+    } catch (firstError) {
+      this.logger.warn({ ...context, error: firstError }, 'persistence failed, retrying once');
+      try {
+        return await fn();
+      } catch (secondError) {
+        this.logger.error({ ...context, error: secondError }, 'persistence failed after retry');
+        return undefined;
+      }
+    }
   }
 
   private isRateLimited(socketId: string, minGapMs = 40): boolean {
