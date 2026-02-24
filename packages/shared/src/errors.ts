@@ -1,0 +1,18 @@
+export const ERROR_CODES = [
+  'ROOM_NOT_FOUND',
+  'ROOM_FULL',
+  'INVALID_NAME',
+  'NOT_HOST',
+  'NOT_IN_LOBBY',
+  'NOT_IN_GAME',
+  'NOT_YOUR_TURN',
+  'SLAP_WINDOW_ACTIVE',
+  'NO_SLAP_WINDOW',
+  'INVALID_EVENT_ID',
+  'INVALID_GESTURE',
+  'ALREADY_SLAPPED',
+  'RATE_LIMITED',
+  'INTERNAL_ERROR',
+] as const;
+
+export type ErrorCode = (typeof ERROR_CODES)[number];
