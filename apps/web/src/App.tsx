@@ -1,5 +1,5 @@
 import { CHANT_ORDER, type Card, type Gesture } from '@slaphard/shared';
-import { useCallback, useEffect, useMemo, useRef, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   initAudio,
   playClickSound,
@@ -74,6 +74,7 @@ const ConfettiBurst = ({ seed }: { seed: string }) => {
 export const App = () => {
   const apiRef = useRef<SocketApi | null>(null);
   const finishCelebrationRef = useRef<string | undefined>(undefined);
+  const [mobileStatsOpen, setMobileStatsOpen] = useState(false);
 
   const socketStatus = useAppStore((s) => s.socketStatus);
   const roomState = useAppStore((s) => s.roomState);
@@ -261,6 +262,14 @@ export const App = () => {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [submitSlap]);
+
+  useEffect(() => {
+    if (feedCollapsed) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => setFeedCollapsed(true), 3000);
+    return () => window.clearTimeout(timeoutId);
+  }, [feedCollapsed, setFeedCollapsed]);
 
   if (!roomState) {
     return (
@@ -462,7 +471,16 @@ export const App = () => {
   return (
       <main className="game-shell">
         <section className="table-card">
-          <header className="status-micro-strip">
+          <button
+            className={mobileStatsOpen ? 'btn stats-toggle active' : 'btn stats-toggle'}
+            onClick={() => setMobileStatsOpen((open) => !open)}
+            aria-expanded={mobileStatsOpen}
+            aria-controls="mobile-stats"
+          >
+            {mobileStatsOpen ? 'Hide Stats' : 'Show Stats'}
+          </button>
+
+          <header id="mobile-stats" className={mobileStatsOpen ? 'status-micro-strip open' : 'status-micro-strip collapsed-mobile'}>
             <div className="status-micro-chip">
               <strong>Room</strong>
               <span>{roomState.roomCode}</span>
@@ -494,8 +512,14 @@ export const App = () => {
           </section>
 
           <section className="mini-stats">
-            <span className="stat-pill">Your Hand: {me?.handCount ?? 0}</span>
-            <span className="stat-pill">Last Slap Place: {myPlace}</span>
+            <div className="stat-pill">
+              <span className="stat-label">Your Hand</span>
+              <strong>{me?.handCount ?? 0}</strong>
+            </div>
+            <div className="stat-pill">
+              <span className="stat-label">Last Slap Place</span>
+              <strong>{myPlace}</strong>
+            </div>
           </section>
 
           {isActionWindow ? (
@@ -561,7 +585,12 @@ export const App = () => {
         </section>
 
       <aside className={feedCollapsed ? 'feed-drawer collapsed' : 'feed-drawer'}>
-        <h3>Game Feed</h3>
+        <div className="feed-header">
+          <h3>Game Feed</h3>
+          <button className="btn feed-close" onClick={() => setFeedCollapsed(true)}>
+            Close
+          </button>
+        </div>
         <ul>
           {feed.map((item, index) => (
             <li key={`${item}-${index}`}>{item}</li>
