@@ -1,5 +1,5 @@
 import { Pool, type PoolClient } from 'pg';
-import { config } from '../config';
+import { config } from '../runtime-config';
 
 let pool: Pool | null = null;
 

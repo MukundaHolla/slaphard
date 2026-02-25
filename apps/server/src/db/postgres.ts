@@ -40,17 +40,36 @@ export class PostgresPersistenceRepository implements PersistenceRepository {
 }
 
 export class NoopPersistenceRepository implements PersistenceRepository {
-  async upsertRoomMetadata(_room: RoomState): Promise<void> {}
-  async writeRoomSnapshot(_room: RoomState, _transitionType: RoomTransitionType): Promise<void> {}
-  async markRoomDeleted(_roomId: string, _deletedAt: Date): Promise<void> {}
-  async startMatch(_roomId: string, _startedAt: Date): Promise<string> {
+  async upsertRoomMetadata(room: RoomState): Promise<void> {
+    void room;
+  }
+  async writeRoomSnapshot(room: RoomState, transitionType: RoomTransitionType): Promise<void> {
+    void room;
+    void transitionType;
+  }
+  async markRoomDeleted(roomId: string, deletedAt: Date): Promise<void> {
+    void roomId;
+    void deletedAt;
+  }
+  async startMatch(roomId: string, startedAt: Date): Promise<string> {
+    void roomId;
+    void startedAt;
     return 'noop';
   }
   async finishMatch(
-    _matchId: string,
-    _winnerUserId: string | null,
-    _summary: MatchSummary,
-    _endedAt: Date,
-  ): Promise<void> {}
-  async appendMatchEvent(_matchId: string, _eventType: MatchEventType, _payload: unknown): Promise<void> {}
+    matchId: string,
+    winnerUserId: string | null,
+    summary: MatchSummary,
+    endedAt: Date,
+  ): Promise<void> {
+    void matchId;
+    void winnerUserId;
+    void summary;
+    void endedAt;
+  }
+  async appendMatchEvent(matchId: string, eventType: MatchEventType, payload: unknown): Promise<void> {
+    void matchId;
+    void eventType;
+    void payload;
+  }
 }

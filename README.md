@@ -46,6 +46,7 @@ pnpm test
 - `DATABASE_URL` (required when `ENABLE_DB_PERSISTENCE=true`)
 - `ENABLE_DB_PERSISTENCE` (default `true`)
 - `ALLOW_IN_MEMORY_ROOM_STORE` (default `false`)
+- `CORS_ORIGINS` (comma-separated origins; required in production, defaults to local dev origins otherwise)
 
 ## Notes
 

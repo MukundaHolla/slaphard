@@ -1,7 +1,7 @@
 import Fastify from 'fastify';
 import Redis from 'ioredis';
 import { Server as SocketIOServer } from 'socket.io';
-import { config } from './config';
+import { config } from './runtime-config';
 import { closeDbPool } from './db/client';
 import { NoopPersistenceRepository, PostgresPersistenceRepository } from './db/postgres';
 import { logger } from './logger';
@@ -43,7 +43,7 @@ const persistenceRepo = (() => {
 
 const io = new SocketIOServer(app.server, {
   cors: {
-    origin: '*',
+    origin: config.corsOrigins,
     methods: ['GET', 'POST'],
   },
 });

@@ -563,7 +563,16 @@ export class GameService {
   }
 
   private async emitRoomState(room: RoomState): Promise<void> {
-    const { gameState: _gameState, ...roomPublic } = room;
+    const roomPublic = {
+      roomId: room.roomId,
+      roomCode: room.roomCode,
+      status: room.status,
+      hostUserId: room.hostUserId,
+      players: room.players,
+      version: room.version,
+      createdAt: room.createdAt,
+      updatedAt: room.updatedAt,
+    };
 
     for (const player of room.players) {
       const socketIds = this.socketsByUserId.get(player.userId);
