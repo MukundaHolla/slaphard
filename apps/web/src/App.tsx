@@ -189,7 +189,6 @@ export const App = () => {
   const isActionWindow = slapActive && gameState?.slapWindow.reason === 'ACTION';
   const isMyTurn = me && gameState ? me.seatIndex === gameState.currentTurnSeat : false;
   const canFlip = gameState?.status === 'IN_GAME' && isMyTurn && !slapActive;
-  const canSlap = gameState?.status === 'IN_GAME';
 
   const isHost = roomState?.hostUserId === meUserId;
 
@@ -236,7 +235,7 @@ export const App = () => {
   }, [canCreateRoom, clearRoom, normalizedDisplayName]);
 
   const submitSlap = useCallback(() => {
-    if (!canSlap || !gameState) {
+    if (!gameState || gameState.status !== 'IN_GAME') {
       return;
     }
     playSlapSound();
@@ -245,7 +244,7 @@ export const App = () => {
         ? gameState.slapWindow.eventId
         : createClientEventId();
     apiRef.current?.slap(activeEventId, isActionWindow ? selectedGesture : undefined);
-  }, [canSlap, gameState, isActionWindow, selectedGesture]);
+  }, [gameState, isActionWindow, selectedGesture]);
 
   const submitCreateRoom = useCallback(() => {
     if (!canCreateRoom) {
@@ -455,6 +454,22 @@ export const App = () => {
     );
   }
 
+  if (gameState.status !== 'IN_GAME') {
+    return (
+      <main className="home-shell">
+        <section className="home-card">
+          <h2>Syncing Game State...</h2>
+          <p className="muted">Waiting for in-game snapshot from server for room {roomState.roomCode}.</p>
+          <div className="row">
+            <button className="btn danger" onClick={leaveToHome}>
+              Leave Room
+            </button>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
   const currentChant = CHANT_ORDER[gameState.chantIndex]!;
   const flipDisabledReason = gameState.status !== 'IN_GAME'
     ? 'Game is not active.'
@@ -463,11 +478,6 @@ export const App = () => {
       : !isMyTurn
         ? 'Not your turn.'
         : '';
-  const slapDisabledReason = !slapActive
-    ? ''
-    : submittedSlapEventId === gameState.slapWindow.eventId
-      ? 'You already slapped this event.'
-      : '';
   const myPlace = (() => {
     const latestResult = feed.find((entry) => entry.startsWith('slap result:'));
     if (!latestResult) {
@@ -561,14 +571,17 @@ export const App = () => {
               FLIP
             </button>
 
-            <button className="btn xlarge slap" disabled={!canSlap} onClick={submitSlap}>
+            <button className="btn xlarge slap" onClick={submitSlap}>
               SLAP (Space)
             </button>
           </section>
 
           <section className="control-hints" aria-live="polite">
             {!canFlip && flipDisabledReason ? <p className="muted">Flip disabled: {flipDisabledReason}</p> : null}
-            {!canSlap && slapDisabledReason ? <p className="muted">Slap disabled: {slapDisabledReason}</p> : null}
+            {!slapActive ? <p className="muted">No slap window open. Slapping now is a false slap penalty.</p> : null}
+            {slapActive && submittedSlapEventId === gameState.slapWindow.eventId ? (
+              <p className="muted">You already slapped this event. Extra slaps are ignored.</p>
+            ) : null}
             {isActionWindow && !selectedGesture ? (
               <p className="muted">No action selected. Slapping now will count as wrong gesture.</p>
             ) : null}

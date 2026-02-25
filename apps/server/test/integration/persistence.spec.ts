@@ -211,6 +211,98 @@ describe('persistence integration', () => {
     expect(roomState.room.status).toBe('LOBBY');
   });
 
+  it('broadcasts first flip progression state to all players', async () => {
+    const repo = new RecordingPersistenceRepo();
+    const { store, url } = await boot(repo);
+
+    const a = ioClient(url, { transports: ['websocket'] });
+    const b = ioClient(url, { transports: ['websocket'] });
+
+    cleanups.push(async () => {
+      a.disconnect();
+      b.disconnect();
+    });
+
+    await Promise.all([once(a, 'connect'), once(b, 'connect')]);
+
+    const aRoomState = once<{ room: RoomState; meUserId: string }>(a, 'v1:room.state');
+    a.emit('v1:room.create', { displayName: 'AA' });
+    const created = await aRoomState;
+
+    const bRoomState = once<{ room: RoomState; meUserId: string }>(
+      b,
+      'v1:room.state',
+      (payload) => payload.room.roomCode === created.room.roomCode,
+    );
+    b.emit('v1:room.join', { roomCode: created.room.roomCode, displayName: 'BB' });
+    const joined = await bRoomState;
+
+    const aInGameRoom = once<{ room: RoomState }>(a, 'v1:room.state', (payload) => payload.room.status === 'IN_GAME');
+    const bInGameRoom = once<{ room: RoomState }>(b, 'v1:room.state', (payload) => payload.room.status === 'IN_GAME');
+    const aInitialGame = once<{ snapshot: { status: string; version: number } }>(
+      a,
+      'v1:game.state',
+      (payload) => payload.snapshot.status === 'IN_GAME',
+    );
+    const bInitialGame = once<{ snapshot: { status: string; version: number } }>(
+      b,
+      'v1:game.state',
+      (payload) => payload.snapshot.status === 'IN_GAME',
+    );
+
+    a.emit('v1:lobby.start', {});
+    await Promise.all([aInGameRoom, bInGameRoom, aInitialGame, bInitialGame]);
+
+    const room = await store.getRoomByCode(created.room.roomCode);
+    expect(room?.gameState).toBeTruthy();
+    if (!room?.gameState) {
+      throw new Error('missing game state');
+    }
+
+    const host = room.gameState.players.find((player) => player.userId === created.meUserId);
+    const guest = room.gameState.players.find((player) => player.userId === joined.meUserId);
+    if (!host || !guest) {
+      throw new Error('players not found');
+    }
+
+    host.hand = ['CAT'];
+    guest.hand = ['PIZZA'];
+    room.gameState.currentTurnSeat = host.seatIndex;
+    room.gameState.chantIndex = 0;
+    room.gameState.pile = [];
+    room.gameState.pileCount = 0;
+    room.gameState.slapWindow = {
+      active: false,
+      receivedSlapsCount: 0,
+      attempts: [],
+      resolved: false,
+    };
+    await store.saveRoom(room);
+
+    const baselineVersion = room.gameState.version;
+    const afterFlipA = once<{ snapshot: { status: string; version: number; currentTurnSeat: number; slapWindow: { active: boolean; resolved: boolean } } }>(
+      a,
+      'v1:game.state',
+      (payload) => payload.snapshot.version > baselineVersion,
+    );
+    const afterFlipB = once<{ snapshot: { status: string; version: number; currentTurnSeat: number; slapWindow: { active: boolean; resolved: boolean } } }>(
+      b,
+      'v1:game.state',
+      (payload) => payload.snapshot.version > baselineVersion,
+    );
+
+    a.emit('v1:game.flip', { clientSeq: 1, clientTime: Date.now() });
+
+    const [stateA, stateB] = await Promise.all([afterFlipA, afterFlipB]);
+
+    expect(stateA.snapshot.status).toBe('IN_GAME');
+    expect(stateB.snapshot.status).toBe('IN_GAME');
+    expect(stateA.snapshot.currentTurnSeat).toBe(guest.seatIndex);
+    expect(stateB.snapshot.currentTurnSeat).toBe(guest.seatIndex);
+    expect(stateA.snapshot.slapWindow.active).toBe(false);
+    expect(stateB.snapshot.slapWindow.active).toBe(false);
+  });
+
   it('closes active match when host stops an in-progress game', async () => {
     const repo = new RecordingPersistenceRepo();
     const { url } = await boot(repo);

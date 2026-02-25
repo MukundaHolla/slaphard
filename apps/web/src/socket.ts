@@ -70,7 +70,20 @@ export const createSocketApi = (): SocketApi => {
     if (!data) {
       return;
     }
-    useAppStore.getState().setGameState(data.snapshot);
+    const store = useAppStore.getState();
+    const previousVersion = store.gameState?.version;
+    store.setGameState(data.snapshot);
+
+    if (!data.snapshot.slapWindow.active || data.snapshot.slapWindow.resolved) {
+      store.clearSlapSubmission();
+    }
+
+    if (previousVersion !== data.snapshot.version) {
+      const slapState = data.snapshot.slapWindow.active && !data.snapshot.slapWindow.resolved ? 'open' : 'idle';
+      store.pushFeed(
+        `state v${data.snapshot.version}: turn=${data.snapshot.currentTurnSeat}, slap=${slapState}`,
+      );
+    }
   });
 
   socket.on('v1:game.slapWindowOpen', (payload) => {
