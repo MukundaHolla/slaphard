@@ -231,6 +231,11 @@ input {
   background: #fff7e8;
 }
 
+.chant-card h3 {
+  font-size: 1.22rem;
+  font-weight: 800;
+}
+
 .card-preview p {
   font-size: 0.72rem;
   opacity: 0.7;
@@ -527,6 +532,10 @@ input {
 
   .card-preview h3 {
     font-size: 0.86rem;
+  }
+
+  .chant-card h3 {
+    font-size: 1.04rem;
   }
 
   .mini-stats {

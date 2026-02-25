@@ -13,6 +13,17 @@ import { getPersistedIdentity, useAppStore } from './store';
 
 const gestureOptions: Gesture[] = ['GORILLA', 'NARWHAL', 'GROUNDHOG'];
 
+const randomHex = (length: number): string => {
+  const bytes = new Uint8Array(Math.ceil(length / 2));
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0'))
+    .join('')
+    .slice(0, length);
+};
+
+const createClientEventId = (): string =>
+  `${randomHex(8)}-${randomHex(4)}-4${randomHex(3)}-a${randomHex(3)}-${randomHex(12)}`;
+
 const CARD_META: Record<Card, { emoji: string; label: string }> = {
   TACO: { emoji: '🌮', label: 'Taco' },
   CAT: { emoji: '🐱', label: 'Cat' },
@@ -178,11 +189,7 @@ export const App = () => {
   const isActionWindow = slapActive && gameState?.slapWindow.reason === 'ACTION';
   const isMyTurn = me && gameState ? me.seatIndex === gameState.currentTurnSeat : false;
   const canFlip = gameState?.status === 'IN_GAME' && isMyTurn && !slapActive;
-  const canSlap =
-    slapActive &&
-    !!gameState?.slapWindow.eventId &&
-    submittedSlapEventId !== gameState.slapWindow.eventId &&
-    (!isActionWindow || !!selectedGesture);
+  const canSlap = gameState?.status === 'IN_GAME';
 
   const isHost = roomState?.hostUserId === meUserId;
 
@@ -229,12 +236,16 @@ export const App = () => {
   }, [canCreateRoom, clearRoom, normalizedDisplayName]);
 
   const submitSlap = useCallback(() => {
-    if (!gameState?.slapWindow.eventId || !canSlap) {
+    if (!canSlap || !gameState) {
       return;
     }
     playSlapSound();
-    apiRef.current?.slap(gameState.slapWindow.eventId, isActionWindow ? selectedGesture : undefined);
-  }, [canSlap, gameState?.slapWindow.eventId, isActionWindow, selectedGesture]);
+    const activeEventId =
+      gameState.slapWindow.active && !gameState.slapWindow.resolved && gameState.slapWindow.eventId
+        ? gameState.slapWindow.eventId
+        : createClientEventId();
+    apiRef.current?.slap(activeEventId, isActionWindow ? selectedGesture : undefined);
+  }, [canSlap, gameState, isActionWindow, selectedGesture]);
 
   const submitCreateRoom = useCallback(() => {
     if (!canCreateRoom) {
@@ -453,12 +464,10 @@ export const App = () => {
         ? 'Not your turn.'
         : '';
   const slapDisabledReason = !slapActive
-    ? 'No slap window open.'
+    ? ''
     : submittedSlapEventId === gameState.slapWindow.eventId
       ? 'You already slapped this event.'
-      : isActionWindow && !selectedGesture
-        ? 'Select the required action first.'
-        : '';
+      : '';
   const myPlace = (() => {
     const latestResult = feed.find((entry) => entry.startsWith('slap result:'));
     if (!latestResult) {
@@ -560,6 +569,9 @@ export const App = () => {
           <section className="control-hints" aria-live="polite">
             {!canFlip && flipDisabledReason ? <p className="muted">Flip disabled: {flipDisabledReason}</p> : null}
             {!canSlap && slapDisabledReason ? <p className="muted">Slap disabled: {slapDisabledReason}</p> : null}
+            {isActionWindow && !selectedGesture ? (
+              <p className="muted">No action selected. Slapping now will count as wrong gesture.</p>
+            ) : null}
           </section>
 
           <section className="secondary-controls">
