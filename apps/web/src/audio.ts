@@ -1,4 +1,4 @@
-type SoundKey = 'click' | 'flip' | 'slap' | 'penalty' | 'win';
+type SoundKey = 'click' | 'flip' | 'slap' | 'penalty' | 'win' | 'sad' | 'cheer';
 
 const SOUND_SPECS: Record<SoundKey, { path: string; volume: number }> = {
   click: { path: '/sfx/click.wav', volume: 0.4 },
@@ -6,6 +6,8 @@ const SOUND_SPECS: Record<SoundKey, { path: string; volume: number }> = {
   slap: { path: '/sfx/slap.wav', volume: 0.65 },
   penalty: { path: '/sfx/penalty.wav', volume: 0.6 },
   win: { path: '/sfx/win.wav', volume: 0.65 },
+  sad: { path: '/sfx/sad.wav', volume: 0.62 },
+  cheer: { path: '/sfx/cheer.wav', volume: 0.68 },
 };
 
 class AudioEngine {
@@ -83,4 +85,12 @@ export const playPenaltySound = (): void => {
 
 export const playWinSound = (): void => {
   engine.play('win');
+};
+
+export const playSadSound = (): void => {
+  engine.play('sad');
+};
+
+export const playCheerSound = (): void => {
+  engine.play('cheer');
 };

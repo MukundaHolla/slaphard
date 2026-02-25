@@ -1,0 +1,50 @@
+databases:
+  - name: slaphard-postgres
+    databaseName: slaphard
+    user: slaphard
+    plan: basic-256mb
+
+services:
+  - type: keyvalue
+    name: slaphard-redis
+    plan: free
+    ipAllowList: []
+    maxmemoryPolicy: allkeys-lru
+
+  - type: web
+    name: slaphard-api
+    runtime: node
+    plan: free
+    autoDeployTrigger: commit
+    buildCommand: pnpm install --frozen-lockfile --prod=false && pnpm --filter @slaphard/server build
+    preDeployCommand: pnpm --filter @slaphard/server db:migrate
+    startCommand: pnpm --filter @slaphard/server start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ENABLE_DB_PERSISTENCE
+        value: "true"
+      - key: ALLOW_IN_MEMORY_ROOM_STORE
+        value: "false"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: slaphard-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: slaphard-redis
+          property: connectionString
+      - key: CORS_ORIGINS
+        sync: false
+
+  - type: web
+    name: slaphard-web
+    runtime: static
+    autoDeployTrigger: commit
+    buildCommand: pnpm install --frozen-lockfile --prod=false && pnpm --filter @slaphard/web build
+    staticPublishPath: apps/web/dist
+    envVars:
+      - key: VITE_SERVER_URL
+        sync: false

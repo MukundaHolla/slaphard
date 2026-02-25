@@ -2,14 +2,14 @@ import { ACTION_CARDS, ALL_CARDS, MAX_PLAYERS, MIN_PLAYERS } from '@slaphard/sha
 import type { Card } from '@slaphard/shared';
 
 export const DEFAULT_DECK: Card[] = [
-  ...Array(7).fill('TACO'),
-  ...Array(7).fill('CAT'),
-  ...Array(7).fill('GOAT'),
-  ...Array(7).fill('CHEESE'),
-  ...Array(7).fill('PIZZA'),
-  ...Array(4).fill('GORILLA'),
-  ...Array(4).fill('NARWHAL'),
-  ...Array(4).fill('GROUNDHOG'),
+  ...Array(2).fill('TACO'),
+  ...Array(2).fill('CAT'),
+  ...Array(2).fill('GOAT'),
+  ...Array(2).fill('CHEESE'),
+  ...Array(2).fill('PIZZA'),
+  ...Array(2).fill('GORILLA'),
+  ...Array(2).fill('NARWHAL'),
+  ...Array(1).fill('GROUNDHOG'),
 ] as Card[];
 
 export const isValidDeck = (cards: Card[]): boolean => cards.every((card) => ALL_CARDS.includes(card));

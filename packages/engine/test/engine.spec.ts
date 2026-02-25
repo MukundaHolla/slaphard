@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyEvent, createInitialState, shuffleDeck } from '../src';
+import { DEFAULT_DECK, applyEvent, createInitialState, shuffleDeck } from '../src';
 
 const players = [
   { userId: 'u1', displayName: 'P1' },
@@ -7,6 +7,12 @@ const players = [
 ];
 
 describe('engine', () => {
+  it('uses a 15-card default deck with all normal and action cards present', () => {
+    expect(DEFAULT_DECK.length).toBe(15);
+    expect(DEFAULT_DECK).toEqual(expect.arrayContaining(['TACO', 'CAT', 'GOAT', 'CHEESE', 'PIZZA']));
+    expect(DEFAULT_DECK).toEqual(expect.arrayContaining(['GORILLA', 'NARWHAL', 'GROUNDHOG']));
+  });
+
   it('deals an even split deterministically with a seed', () => {
     const baseDeck = ['TACO', 'CAT', 'GOAT', 'CHEESE', 'PIZZA', 'GORILLA'] as const;
     const shuffledOne = shuffleDeck([...baseDeck], 'seed-1');

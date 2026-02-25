@@ -7,7 +7,7 @@ import {
   type ServerEventName,
   type ServerEventPayload,
 } from '@slaphard/shared';
-import { playPenaltySound } from './audio';
+import { playCheerSound, playSadSound } from './audio';
 import { useAppStore } from './store';
 
 const serverUrl = import.meta.env.VITE_SERVER_URL ?? 'http://localhost:3001';
@@ -92,6 +92,15 @@ export const createSocketApi = (): SocketApi => {
       return;
     }
     const me = useAppStore.getState().meUserId;
+
+    if (data.reason !== 'FIRST_VALID_SLAP_WIN' && data.reason !== 'NO_SLAPS') {
+      if (me && me === data.loserUserId) {
+        playSadSound();
+      } else {
+        playCheerSound();
+      }
+    }
+
     const place = me ? data.orderedUserIds.findIndex((id: string) => id === me) : -1;
     const placeText = place >= 0 ? `${place + 1}${place === 0 ? 'st' : place === 1 ? 'nd' : 'th'}` : 'none';
     useAppStore.getState().pushFeed(`slap result: you=${placeText}, loser=${data.loserUserId.slice(0, 6)}`);
@@ -103,7 +112,15 @@ export const createSocketApi = (): SocketApi => {
     if (!data) {
       return;
     }
-    playPenaltySound();
+    const me = useAppStore.getState().meUserId;
+    const isIdlePenalty = data.type === 'TURN_TIMEOUT' || data.type === 'NO_SLAPS';
+    if (!isIdlePenalty) {
+      if (me && me === data.userId) {
+        playSadSound();
+      } else {
+        playCheerSound();
+      }
+    }
     useAppStore.getState().pushFeed(`penalty: ${data.type} on ${data.userId.slice(0, 6)}`);
   });
 

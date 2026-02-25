@@ -55,3 +55,8 @@ pnpm test
 - Client gets full hand only for the current player (`meHand`); other players receive counts only.
 - Redis stores live room state and timers.
 - Postgres stores room/match persistence snapshots on key transitions.
+
+## Deployment
+
+- Render deployment guide: [`docs/deploy-render.md`](docs/deploy-render.md)
+- Optional Render Blueprint: [`render.yaml`](render.yaml)

@@ -240,11 +240,16 @@ export const App = () => {
   }
 
   if (roomState.status === 'LOBBY') {
+    const hostPlayer = roomState.players.find((player) => player.userId === roomState.hostUserId);
+    const hostLabel = hostPlayer
+      ? `${hostPlayer.displayName} (${hostPlayer.userId.slice(0, 8)})`
+      : roomState.hostUserId.slice(0, 8);
+
     return (
       <main className="home-shell">
         <section className="home-card">
           <h2>Lobby {roomState.roomCode}</h2>
-          <p className="muted">Host: {roomState.hostUserId.slice(0, 8)}</p>
+          <p className="muted">Host: {hostLabel}</p>
 
           <ul className="players-list">
             {roomState.players.map((player) => (
