@@ -105,6 +105,26 @@ export const deterministicEventId = (nonce: number): string => {
 
 export const advanceSeat = (seat: number, totalPlayers: number): number => (seat + 1) % totalPlayers;
 
+export const normalizeTurnSeat = (state: GameState): void => {
+  if (state.status !== 'IN_GAME') {
+    return;
+  }
+  if (state.players[state.currentTurnSeat]?.hand.length) {
+    return;
+  }
+  if (state.slapWindow.active && !state.slapWindow.resolved) {
+    return;
+  }
+
+  for (let i = 1; i < state.players.length; i += 1) {
+    const seat = (state.currentTurnSeat + i) % state.players.length;
+    if ((state.players[seat]?.hand.length ?? 0) > 0) {
+      state.currentTurnSeat = seat;
+      return;
+    }
+  }
+};
+
 export const pileToBottom = (state: GameState, seat: number): number => {
   const pileTaken = state.pile.length;
   if (pileTaken > 0) {

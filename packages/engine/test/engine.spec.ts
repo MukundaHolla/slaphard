@@ -5,6 +5,11 @@ const players = [
   { userId: 'u1', displayName: 'P1' },
   { userId: 'u2', displayName: 'P2' },
 ];
+const players3 = [
+  { userId: 'u1', displayName: 'P1' },
+  { userId: 'u2', displayName: 'P2' },
+  { userId: 'u3', displayName: 'P3' },
+];
 
 describe('engine', () => {
   it('uses a 15-card default deck with all normal and action cards present', () => {
@@ -326,5 +331,29 @@ describe('engine', () => {
 
     expect(slap.state.status).toBe('FINISHED');
     expect(slap.state.winnerUserId).toBe('u2');
+  });
+
+  it('skips zero-card players when assigning next flip turn', () => {
+    const state = createInitialState({
+      players: players3,
+      deck: ['CAT', 'GOAT', 'CHEESE', 'PIZZA'],
+      seed: 1,
+      shuffle: false,
+      nowServerTime: 1000,
+    });
+
+    state.players[0]!.hand = ['CAT'];
+    state.players[1]!.hand = [];
+    state.players[2]!.hand = ['GOAT', 'CHEESE'];
+    state.currentTurnSeat = 0;
+    state.chantIndex = 0;
+
+    const flipped = applyEvent(state, { type: 'FLIP', userId: 'u1' }, 1010);
+    expect(flipped.error).toBeUndefined();
+    expect(flipped.state.currentTurnSeat).toBe(2);
+
+    const nextFlip = applyEvent(flipped.state, { type: 'FLIP', userId: 'u3' }, 1020);
+    expect(nextFlip.error).toBeUndefined();
+    expect(nextFlip.state.lastRevealed?.byUserId).toBe('u3');
   });
 });

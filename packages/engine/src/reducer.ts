@@ -11,6 +11,7 @@ import {
   cloneState,
   currentChantWord,
   deterministicEventId,
+  normalizeTurnSeat,
   pileToBottom,
   resetSlapWindow,
   resolveReactionMs,
@@ -90,6 +91,7 @@ const resolveSlapWindowInternal = (state: GameState): { effects: EngineEffect[] 
     const loserUserId = state.players[loserSeat]!.userId;
     const pileTaken = pileToBottom(state, loserSeat);
     state.currentTurnSeat = loserSeat;
+    normalizeTurnSeat(state);
 
     effects.push({
       type: 'PENALTY',
@@ -142,6 +144,7 @@ const resolveSlapWindowInternal = (state: GameState): { effects: EngineEffect[] 
   if (loserSeat >= 0) {
     pileToBottom(state, loserSeat);
     state.currentTurnSeat = loserSeat;
+    normalizeTurnSeat(state);
   }
 
   resetSlapWindow(state);
@@ -158,6 +161,7 @@ const applyPenalty = (
   const pileTaken = pileToBottom(state, seat);
   state.currentTurnSeat = seat;
   resetSlapWindow(state);
+  normalizeTurnSeat(state);
   return {
     type: 'PENALTY',
     userId,
@@ -198,8 +202,9 @@ export const validateEvent = (state: GameState, event: EngineEvent): ValidationR
 };
 
 export const applyEvent = (state: GameState, event: EngineEvent, nowServerTime: number): EngineResult => {
-  const validation = validateEvent(state, event);
   const next = cloneState(state);
+  normalizeTurnSeat(next);
+  const validation = validateEvent(next, event);
 
   if (!validation.ok && event.type !== 'SLAP') {
     return {
@@ -286,6 +291,7 @@ export const applyEvent = (state: GameState, event: EngineEvent, nowServerTime: 
     }
 
     next.currentTurnSeat = advanceSeat(next.currentTurnSeat, next.players.length);
+    normalizeTurnSeat(next);
     next.chantIndex = (next.chantIndex + 1) % CHANT_ORDER.length;
     next.version += 1;
 

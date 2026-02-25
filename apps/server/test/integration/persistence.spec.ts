@@ -303,6 +303,96 @@ describe('persistence integration', () => {
     expect(stateB.snapshot.slapWindow.active).toBe(false);
   });
 
+  it('skips zero-card turn seat after flip in three-player flow', async () => {
+    const repo = new RecordingPersistenceRepo();
+    const { store, url } = await boot(repo);
+
+    const a = ioClient(url, { transports: ['websocket'] });
+    const b = ioClient(url, { transports: ['websocket'] });
+    const c = ioClient(url, { transports: ['websocket'] });
+
+    cleanups.push(async () => {
+      a.disconnect();
+      b.disconnect();
+      c.disconnect();
+    });
+
+    await Promise.all([once(a, 'connect'), once(b, 'connect'), once(c, 'connect')]);
+
+    const createdState = once<{ room: RoomState; meUserId: string }>(a, 'v1:room.state');
+    a.emit('v1:room.create', { displayName: 'AA' });
+    const created = await createdState;
+
+    const joinedB = once<{ room: RoomState; meUserId: string }>(
+      b,
+      'v1:room.state',
+      (payload) => payload.room.roomCode === created.room.roomCode,
+    );
+    b.emit('v1:room.join', { roomCode: created.room.roomCode, displayName: 'BB' });
+    const bState = await joinedB;
+
+    const joinedC = once<{ room: RoomState; meUserId: string }>(
+      c,
+      'v1:room.state',
+      (payload) => payload.room.roomCode === created.room.roomCode,
+    );
+    c.emit('v1:room.join', { roomCode: created.room.roomCode, displayName: 'CC' });
+    const cState = await joinedC;
+
+    const aInGame = once<{ room: RoomState }>(a, 'v1:room.state', (payload) => payload.room.status === 'IN_GAME');
+    const bInGame = once<{ room: RoomState }>(b, 'v1:room.state', (payload) => payload.room.status === 'IN_GAME');
+    const cInGame = once<{ room: RoomState }>(c, 'v1:room.state', (payload) => payload.room.status === 'IN_GAME');
+    a.emit('v1:lobby.start', {});
+    await Promise.all([aInGame, bInGame, cInGame]);
+
+    const room = await store.getRoomByCode(created.room.roomCode);
+    expect(room?.gameState).toBeTruthy();
+    if (!room?.gameState) {
+      throw new Error('missing game state');
+    }
+
+    const seatA = room.gameState.players.find((player) => player.userId === created.meUserId)?.seatIndex;
+    const seatB = room.gameState.players.find((player) => player.userId === bState.meUserId)?.seatIndex;
+    const seatC = room.gameState.players.find((player) => player.userId === cState.meUserId)?.seatIndex;
+    if (seatA === undefined || seatB === undefined || seatC === undefined) {
+      throw new Error('missing seat assignment');
+    }
+
+    room.gameState.players[seatA]!.hand = ['CAT'];
+    room.gameState.players[seatB]!.hand = [];
+    room.gameState.players[seatC]!.hand = ['GOAT', 'CHEESE'];
+    room.gameState.currentTurnSeat = seatA;
+    room.gameState.chantIndex = 0;
+    room.gameState.pile = [];
+    room.gameState.pileCount = 0;
+    room.gameState.slapWindow = {
+      active: false,
+      receivedSlapsCount: 0,
+      attempts: [],
+      resolved: false,
+    };
+    await store.saveRoom(room);
+
+    const stateA = once<{ snapshot: { currentTurnSeat: number; slapWindow: { active: boolean }; version: number } }>(
+      a,
+      'v1:game.state',
+      (payload) => payload.snapshot.currentTurnSeat === seatC && payload.snapshot.slapWindow.active === false,
+    );
+    const stateB = once<{ snapshot: { currentTurnSeat: number; slapWindow: { active: boolean }; version: number } }>(
+      b,
+      'v1:game.state',
+      (payload) => payload.snapshot.currentTurnSeat === seatC && payload.snapshot.slapWindow.active === false,
+    );
+    const stateC = once<{ snapshot: { currentTurnSeat: number; slapWindow: { active: boolean }; version: number } }>(
+      c,
+      'v1:game.state',
+      (payload) => payload.snapshot.currentTurnSeat === seatC && payload.snapshot.slapWindow.active === false,
+    );
+
+    a.emit('v1:game.flip', { clientSeq: 1, clientTime: Date.now() });
+    await Promise.all([stateA, stateB, stateC]);
+  });
+
   it('closes active match when host stops an in-progress game', async () => {
     const repo = new RecordingPersistenceRepo();
     const { url } = await boot(repo);
