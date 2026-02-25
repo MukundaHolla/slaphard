@@ -87,6 +87,13 @@ export const playWinSound = (): void => {
   engine.play('win');
 };
 
+export const playWinnerCelebrationSound = (): void => {
+  engine.play('win');
+  window.setTimeout(() => {
+    engine.play('cheer');
+  }, 220);
+};
+
 export const playSadSound = (): void => {
   engine.play('sad');
 };

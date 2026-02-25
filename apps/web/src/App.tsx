@@ -5,7 +5,7 @@ import {
   playClickSound,
   playFlipSound,
   playSlapSound,
-  playWinSound,
+  playWinnerCelebrationSound,
   unlockAudio,
 } from './audio';
 import { createSocketApi, type SocketApi } from './socket';
@@ -205,7 +205,7 @@ export const App = () => {
       return;
     }
     finishCelebrationRef.current = celebrationKey;
-    playWinSound();
+    playWinnerCelebrationSound();
   }, [gameState?.status, gameState?.version, gameState?.winnerUserId, meUserId]);
 
   useEffect(() => {
@@ -434,12 +434,31 @@ export const App = () => {
 
   if (gameState.status === 'FINISHED') {
     const winner = gameState.players.find((player) => player.userId === gameState.winnerUserId);
+    const standings = [...gameState.players].sort((a, b) => a.handCount - b.handCount || a.seatIndex - b.seatIndex);
+    const winnerTitle = winner?.userId === meUserId ? 'You Win!' : 'Game Over';
     return (
       <main className="home-shell">
-        <section className="home-card">
+        <section className="home-card winner-card">
           <ConfettiBurst seed={gameState.winnerUserId ?? `fin-${gameState.version}`} />
-          <h2>Game Over</h2>
-          <p>Winner: {winner?.displayName ?? gameState.winnerUserId}</p>
+          <div className="winner-headline">
+            <span className="winner-crown" aria-hidden="true">
+              👑
+            </span>
+            <h2>{winnerTitle}</h2>
+            <p className="muted">Room {roomState.roomCode}</p>
+          </div>
+          <div className="winner-highlight">
+            <p className="muted">Champion</p>
+            <h3>{winner?.displayName ?? gameState.winnerUserId}</h3>
+          </div>
+          <ul className="winner-standings">
+            {standings.map((player, index) => (
+              <li key={player.userId}>
+                <span>{index + 1}. {player.displayName}</span>
+                <strong>{player.handCount} cards</strong>
+              </li>
+            ))}
+          </ul>
           <div className="row">
             {isHost ? <button className="btn primary" onClick={() => apiRef.current?.stopGame()}>Return to Lobby</button> : null}
             <button className="btn danger" onClick={leaveToHome}>
