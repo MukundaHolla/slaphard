@@ -1,5 +1,5 @@
 import { CHANT_ORDER, type Card, type Gesture } from '@slaphard/shared';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, type CSSProperties } from 'react';
 import {
   initAudio,
   playClickSound,
@@ -30,6 +30,45 @@ const cardBadge = (card: Card | undefined): string => {
   }
   const meta = CARD_META[card];
   return `${meta.emoji} ${meta.label}`;
+};
+
+const CONFETTI_COLORS = ['#ff5d3b', '#0e74ff', '#ff2f6d', '#42e3a4', '#ffcf2d', '#8b5cf6'] as const;
+
+const ConfettiBurst = ({ seed }: { seed: string }) => {
+  const pieces = useMemo(
+    () =>
+      Array.from({ length: 56 }, (_, index) => ({
+        id: `${seed}-${index}`,
+        left: `${Math.random() * 100}%`,
+        delay: `${Math.random() * 520}ms`,
+        duration: `${2200 + Math.random() * 1200}ms`,
+        drift: `${-120 + Math.random() * 240}px`,
+        rotate: `${Math.random() * 720}deg`,
+        color: CONFETTI_COLORS[Math.floor(Math.random() * CONFETTI_COLORS.length)]!,
+      })),
+    [seed],
+  );
+
+  return (
+    <div className="confetti-layer" aria-hidden="true">
+      {pieces.map((piece) => (
+        <span
+          key={piece.id}
+          className="confetti-piece"
+          style={
+            {
+              left: piece.left,
+              animationDelay: piece.delay,
+              animationDuration: piece.duration,
+              '--drift-x': piece.drift,
+              '--spin': piece.rotate,
+              background: piece.color,
+            } as CSSProperties
+          }
+        />
+      ))}
+    </div>
+  );
 };
 
 export const App = () => {
@@ -300,6 +339,7 @@ export const App = () => {
     return (
       <main className="home-shell">
         <section className="home-card">
+          <ConfettiBurst seed={gameState.winnerUserId ?? `fin-${gameState.version}`} />
           <h2>Game Over</h2>
           <p>Winner: {winner?.displayName ?? gameState.winnerUserId}</p>
           <div className="row">
