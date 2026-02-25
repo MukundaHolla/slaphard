@@ -13,6 +13,8 @@ interface TimeSyncState {
 
 interface UiState {
   roomCodeInput: string;
+  homeStep: 'identity' | 'roomAction';
+  homeMode: 'create' | 'join';
   selectedGesture: Gesture | undefined;
   submittedSlapEventId: string | undefined;
   feedCollapsed: boolean;
@@ -33,6 +35,8 @@ interface AppState {
   setSocketStatus: (status: SocketStatus) => void;
   setDisplayName: (displayName: string) => void;
   setRoomCodeInput: (code: string) => void;
+  setHomeStep: (step: UiState['homeStep']) => void;
+  setHomeMode: (mode: UiState['homeMode']) => void;
   setRoomState: (room: RoomState, meUserId: string) => void;
   setGameState: (state: GameStateView) => void;
   setSelectedGesture: (gesture?: Gesture) => void;
@@ -136,6 +140,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   ui: {
     roomCodeInput: '',
+    homeStep: 'identity',
+    homeMode: 'create',
     selectedGesture: undefined,
     submittedSlapEventId: undefined,
     feedCollapsed: persistedFeedCollapsed(),
@@ -149,6 +155,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setRoomCodeInput: (roomCodeInput) => set((state) => ({ ui: { ...state.ui, roomCodeInput } })),
+
+  setHomeStep: (homeStep) => set((state) => ({ ui: { ...state.ui, homeStep } })),
+
+  setHomeMode: (homeMode) => set((state) => ({ ui: { ...state.ui, homeMode } })),
 
   setRoomState: (roomState, meUserId) => {
     persistIdentity({ userId: meUserId, roomCode: roomState.roomCode, displayName: undefined });
@@ -190,6 +200,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       persistedRoomCode: undefined,
       ui: {
         roomCodeInput: '',
+        homeStep: 'identity',
+        homeMode: 'create',
         selectedGesture: undefined,
         submittedSlapEventId: undefined,
         feedCollapsed: state.ui.feedCollapsed,

@@ -37,12 +37,12 @@ const CONFETTI_COLORS = ['#ff5d3b', '#0e74ff', '#ff2f6d', '#42e3a4', '#ffcf2d', 
 const ConfettiBurst = ({ seed }: { seed: string }) => {
   const pieces = useMemo(
     () =>
-      Array.from({ length: 56 }, (_, index) => ({
+      Array.from({ length: 48 }, (_, index) => ({
         id: `${seed}-${index}`,
         left: `${Math.random() * 100}%`,
-        delay: `${Math.random() * 520}ms`,
-        duration: `${2200 + Math.random() * 1200}ms`,
-        drift: `${-120 + Math.random() * 240}px`,
+        delay: `${Math.random() * 1400}ms`,
+        duration: `${5200 + Math.random() * 3200}ms`,
+        drift: `${-160 + Math.random() * 320}px`,
         rotate: `${Math.random() * 720}deg`,
         color: CONFETTI_COLORS[Math.floor(Math.random() * CONFETTI_COLORS.length)]!,
       })),
@@ -73,6 +73,7 @@ const ConfettiBurst = ({ seed }: { seed: string }) => {
 
 export const App = () => {
   const apiRef = useRef<SocketApi | null>(null);
+  const finishCelebrationRef = useRef<string | undefined>(undefined);
 
   const socketStatus = useAppStore((s) => s.socketStatus);
   const roomState = useAppStore((s) => s.roomState);
@@ -82,14 +83,17 @@ export const App = () => {
   const feed = useAppStore((s) => s.feed);
   const pingIntervalMs = useAppStore((s) => s.timeSync.pingIntervalMs);
   const rttAvg = useAppStore((s) => s.timeSync.rttAvg);
-  const offsetAvg = useAppStore((s) => s.timeSync.offsetAvg);
   const roomCodeInput = useAppStore((s) => s.ui.roomCodeInput);
+  const homeStep = useAppStore((s) => s.ui.homeStep);
+  const homeMode = useAppStore((s) => s.ui.homeMode);
   const selectedGesture = useAppStore((s) => s.ui.selectedGesture);
   const submittedSlapEventId = useAppStore((s) => s.ui.submittedSlapEventId);
   const feedCollapsed = useAppStore((s) => s.ui.feedCollapsed);
 
   const setDisplayName = useAppStore((s) => s.setDisplayName);
   const setRoomCodeInput = useAppStore((s) => s.setRoomCodeInput);
+  const setHomeStep = useAppStore((s) => s.setHomeStep);
+  const setHomeMode = useAppStore((s) => s.setHomeMode);
   const setSelectedGesture = useAppStore((s) => s.setSelectedGesture);
   const clearRoom = useAppStore((s) => s.clearRoom);
   const setSocketStatus = useAppStore((s) => s.setSocketStatus);
@@ -182,10 +186,32 @@ export const App = () => {
   const isHost = roomState?.hostUserId === meUserId;
 
   useEffect(() => {
-    if (gameState?.status === 'FINISHED' && gameState.winnerUserId === meUserId) {
-      playWinSound();
+    if (gameState?.status !== 'FINISHED') {
+      finishCelebrationRef.current = undefined;
+      return;
     }
-  }, [gameState?.status, gameState?.winnerUserId, meUserId]);
+    if (!meUserId || gameState.winnerUserId !== meUserId) {
+      return;
+    }
+    const celebrationKey = `${gameState.winnerUserId}:${gameState.version}`;
+    if (finishCelebrationRef.current === celebrationKey) {
+      return;
+    }
+    finishCelebrationRef.current = celebrationKey;
+    playWinSound();
+  }, [gameState?.status, gameState?.version, gameState?.winnerUserId, meUserId]);
+
+  useEffect(() => {
+    const inActiveGame = roomState?.status === 'IN_GAME' && gameState?.status === 'IN_GAME';
+    if (!inActiveGame) {
+      document.body.classList.remove('game-active');
+      return;
+    }
+    document.body.classList.add('game-active');
+    return () => {
+      document.body.classList.remove('game-active');
+    };
+  }, [gameState?.status, roomState?.status]);
 
   const leaveToHome = useCallback(() => {
     apiRef.current?.leaveRoom();
@@ -209,6 +235,20 @@ export const App = () => {
     apiRef.current?.slap(gameState.slapWindow.eventId, isActionWindow ? selectedGesture : undefined);
   }, [canSlap, gameState?.slapWindow.eventId, isActionWindow, selectedGesture]);
 
+  const submitCreateRoom = useCallback(() => {
+    if (!canCreateRoom) {
+      return;
+    }
+    apiRef.current?.createRoom(normalizedDisplayName);
+  }, [canCreateRoom, normalizedDisplayName]);
+
+  const submitJoinRoom = useCallback(() => {
+    if (!canJoinRoom) {
+      return;
+    }
+    apiRef.current?.joinRoom(normalizedRoomCode, normalizedDisplayName, meUserId);
+  }, [canJoinRoom, meUserId, normalizedDisplayName, normalizedRoomCode]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.code !== 'Space') {
@@ -229,50 +269,89 @@ export const App = () => {
           <h1>SlapHard</h1>
           <p className="muted">Socket: {socketStatus}</p>
 
-          <label>
-            Display Name
-            <input
-              value={displayName}
-              maxLength={24}
-              minLength={2}
-              onChange={(event) => setDisplayName(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && canCreateRoom) {
-                  playClickSound();
-                  apiRef.current?.createRoom(normalizedDisplayName);
-                }
-              }}
-            />
-          </label>
+          {homeStep === 'identity' ? (
+            <section className="home-step">
+              <label>
+                Display Name
+                <input
+                  value={displayName}
+                  maxLength={24}
+                  minLength={2}
+                  onChange={(event) => setDisplayName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && canCreateRoom) {
+                      playClickSound();
+                      setHomeStep('roomAction');
+                    }
+                  }}
+                />
+              </label>
+              <div className="row">
+                <button className="btn primary" disabled={!canCreateRoom} onClick={() => setHomeStep('roomAction')}>
+                  Continue
+                </button>
+              </div>
+              {!canCreateRoom ? <p className="muted">Display name must be at least 2 characters.</p> : null}
+            </section>
+          ) : (
+            <section className="home-step">
+              <p className="muted">Choose room action for {normalizedDisplayName}.</p>
+              <div className="home-mode-switch" role="tablist" aria-label="Room action mode">
+                <button
+                  className={homeMode === 'create' ? 'btn mode-tab active' : 'btn mode-tab'}
+                  role="tab"
+                  aria-selected={homeMode === 'create'}
+                  onClick={() => setHomeMode('create')}
+                >
+                  Create
+                </button>
+                <button
+                  className={homeMode === 'join' ? 'btn mode-tab active' : 'btn mode-tab'}
+                  role="tab"
+                  aria-selected={homeMode === 'join'}
+                  onClick={() => setHomeMode('join')}
+                >
+                  Join
+                </button>
+              </div>
 
-          <div className="row">
-            <button className="btn primary" disabled={!canCreateRoom} onClick={() => apiRef.current?.createRoom(normalizedDisplayName)}>
-              Create Room
-            </button>
-          </div>
-          {!canCreateRoom ? <p className="muted">Display name must be at least 2 characters.</p> : null}
+              <div className={homeMode === 'create' ? 'home-action-card active' : 'home-action-card'}>
+                <h3>Create Room</h3>
+                <p className="muted">Start a private room and share the code.</p>
+                <button className="btn primary" disabled={!canCreateRoom} onClick={submitCreateRoom}>
+                  Create Room
+                </button>
+              </div>
 
-          <label>
-            Join Code
-            <input
-              value={roomCodeInput}
-              maxLength={6}
-              onChange={(event) => setRoomCodeInput(event.target.value.toUpperCase())}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && canJoinRoom) {
-                  playClickSound();
-                  apiRef.current?.joinRoom(normalizedRoomCode, normalizedDisplayName, meUserId);
-                }
-              }}
-            />
-          </label>
+              <div className={homeMode === 'join' ? 'home-action-card active' : 'home-action-card'}>
+                <h3>Join Room</h3>
+                <label>
+                  Join Code
+                  <input
+                    value={roomCodeInput}
+                    maxLength={6}
+                    onChange={(event) => setRoomCodeInput(event.target.value.toUpperCase())}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && canJoinRoom) {
+                        playClickSound();
+                        submitJoinRoom();
+                      }
+                    }}
+                  />
+                </label>
+                <button className="btn" disabled={!canJoinRoom} onClick={submitJoinRoom}>
+                  Join Room
+                </button>
+                {!canJoinRoom ? <p className="muted">{joinDisabledReason}</p> : null}
+              </div>
 
-          <div className="row">
-            <button className="btn" disabled={!canJoinRoom} onClick={() => apiRef.current?.joinRoom(normalizedRoomCode, normalizedDisplayName, meUserId)}>
-              Join Room
-            </button>
-          </div>
-          {!canJoinRoom ? <p className="muted">{joinDisabledReason}</p> : null}
+              <div className="row">
+                <button className="btn" onClick={() => setHomeStep('identity')}>
+                  Back
+                </button>
+              </div>
+            </section>
+          )}
         </section>
       </main>
     );
@@ -381,109 +460,105 @@ export const App = () => {
   })();
 
   return (
-    <main className="game-shell">
-      <section className="table-card">
-        <header className="status-strip">
-          <div className="status-chip">
-            <strong>Room</strong>
-            <span>{roomState.roomCode}</span>
-          </div>
-          <div className="status-chip">
-            <strong>Turn</strong>
-            <span>Seat {gameState.currentTurnSeat}</span>
-          </div>
-          <div className="status-chip">
-            <strong>Chant</strong>
-            <span>{cardBadge(currentChant)}</span>
-          </div>
-          <div className="status-chip">
-            <strong>Pile</strong>
-            <span>{gameState.pileCount}</span>
-          </div>
-          <div className="status-chip">
-            <strong>Latency</strong>
-            <span>{Math.round(rttAvg)}ms / {Math.round(offsetAvg)}ms</span>
-          </div>
-        </header>
+      <main className="game-shell">
+        <section className="table-card">
+          <header className="status-micro-strip">
+            <div className="status-micro-chip">
+              <strong>Room</strong>
+              <span>{roomState.roomCode}</span>
+            </div>
+            <div className="status-micro-chip">
+              <strong>Turn</strong>
+              <span>Seat {gameState.currentTurnSeat}</span>
+            </div>
+            <div className="status-micro-chip">
+              <strong>Pile</strong>
+              <span>{gameState.pileCount}</span>
+            </div>
+            <div className="status-micro-chip">
+              <strong>Latency</strong>
+              <span>{Math.round(rttAvg)}ms</span>
+            </div>
+          </header>
 
-        <section className="action-zone">
-          <div className="card-preview">
-            <p>Last Revealed</p>
-            <h3>{cardBadge(gameState.lastRevealed?.card)}</h3>
-          </div>
+          <section className="action-zone compact">
+            <div className="card-preview chant-card">
+              <p>Chant</p>
+              <h3>{cardBadge(currentChant)}</h3>
+            </div>
 
-          <div className="card-preview">
-            <p>Your Hand</p>
-            <h3>{me?.handCount ?? 0} cards</h3>
-          </div>
-
-          <div className="card-preview">
-            <p>Your Last Slap Place</p>
-            <h3>{myPlace}</h3>
-          </div>
-        </section>
-
-        {isActionWindow ? (
-          <section className="gesture-zone" aria-label="Action selection">
-            <p>Required action: {cardBadge(gameState.slapWindow.actionCard)}</p>
-            <div className="gesture-grid">
-              {gestureOptions.map((gesture) => (
-                <button
-                  key={gesture}
-                  className={selectedGesture === gesture ? 'btn gesture active' : 'btn gesture'}
-                  aria-label={`Select ${gesture}`}
-                  onClick={() => setSelectedGesture(gesture)}
-                >
-                  {cardBadge(gesture)}
-                </button>
-              ))}
+            <div className="card-preview">
+              <p>Last Revealed</p>
+              <h3>{cardBadge(gameState.lastRevealed?.card)}</h3>
             </div>
           </section>
-        ) : null}
 
-        <section className="controls-zone">
-          <button
-            className="btn xlarge flip"
-            disabled={!canFlip}
-            onClick={() => {
-              playFlipSound();
-              apiRef.current?.flip();
-            }}
-          >
-            FLIP
-          </button>
+          <section className="mini-stats">
+            <span className="stat-pill">Your Hand: {me?.handCount ?? 0}</span>
+            <span className="stat-pill">Last Slap Place: {myPlace}</span>
+          </section>
 
-          <button className="btn xlarge slap" disabled={!canSlap} onClick={submitSlap}>
-            SLAP (Space)
-          </button>
-        </section>
-
-        <section className="control-hints" aria-live="polite">
-          {!canFlip && flipDisabledReason ? <p className="muted">Flip disabled: {flipDisabledReason}</p> : null}
-          {!canSlap && slapDisabledReason ? <p className="muted">Slap disabled: {slapDisabledReason}</p> : null}
-        </section>
-
-        <section className="secondary-controls">
-          {isHost ? (
-            <button className="btn danger" onClick={() => apiRef.current?.stopGame()}>
-              Stop Game
-            </button>
+          {isActionWindow ? (
+            <section className="gesture-zone" aria-label="Action selection">
+              <p>Required action: {cardBadge(gameState.slapWindow.actionCard)}</p>
+              <div className="gesture-grid">
+                {gestureOptions.map((gesture) => (
+                  <button
+                    key={gesture}
+                    className={selectedGesture === gesture ? 'btn gesture active' : 'btn gesture'}
+                    aria-label={`Select ${gesture}`}
+                    onClick={() => setSelectedGesture(gesture)}
+                  >
+                    {cardBadge(gesture)}
+                  </button>
+                ))}
+              </div>
+            </section>
           ) : null}
-          <button className="btn" onClick={leaveToHome}>
-            Leave Room
-          </button>
-          <button className="btn" disabled={!canCreateRoom} onClick={createFreshRoom}>
-            New Room
-          </button>
-          <button
-            className="btn"
-            onClick={() => setFeedCollapsed(!feedCollapsed)}
-            aria-label={feedCollapsed ? 'Show feed' : 'Hide feed'}
-          >
-            {feedCollapsed ? 'Show Feed' : 'Hide Feed'}
-          </button>
+
+          <section className="controls-zone fixed-controls">
+            <button
+              className="btn xlarge flip"
+              disabled={!canFlip}
+              onClick={() => {
+                playFlipSound();
+                apiRef.current?.flip();
+              }}
+            >
+              FLIP
+            </button>
+
+            <button className="btn xlarge slap" disabled={!canSlap} onClick={submitSlap}>
+              SLAP (Space)
+            </button>
+          </section>
+
+          <section className="control-hints" aria-live="polite">
+            {!canFlip && flipDisabledReason ? <p className="muted">Flip disabled: {flipDisabledReason}</p> : null}
+            {!canSlap && slapDisabledReason ? <p className="muted">Slap disabled: {slapDisabledReason}</p> : null}
+          </section>
+
+          <section className="secondary-controls">
+            {isHost ? (
+              <button className="btn danger" onClick={() => apiRef.current?.stopGame()}>
+                Stop Game
+              </button>
+            ) : null}
+            <button className="btn" onClick={leaveToHome}>
+              Leave Room
+            </button>
+            <button className="btn" disabled={!canCreateRoom} onClick={createFreshRoom}>
+              New Room
+            </button>
+            <button
+              className="btn"
+              onClick={() => setFeedCollapsed(!feedCollapsed)}
+              aria-label={feedCollapsed ? 'Show feed' : 'Hide feed'}
+            >
+              {feedCollapsed ? 'Show Feed' : 'Hide Feed'}
+            </button>
+          </section>
         </section>
-      </section>
 
       <aside className={feedCollapsed ? 'feed-drawer collapsed' : 'feed-drawer'}>
         <h3>Game Feed</h3>
