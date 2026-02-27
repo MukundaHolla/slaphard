@@ -10,6 +10,26 @@ import {
 import { DEFAULT_DECK, isValidDeck, shuffleDeck, validatePlayerCount } from './deck';
 import type { CreateInitialStateConfig } from './types';
 
+const FIXED_HAND_PLAYER_THRESHOLD = 4;
+const FIXED_HAND_SIZE = 5;
+
+const buildDealingDeck = (shuffledDeck: Card[], playerCount: number): Card[] => {
+  if (playerCount <= FIXED_HAND_PLAYER_THRESHOLD) {
+    return shuffledDeck;
+  }
+
+  if (shuffledDeck.length === 0) {
+    return [];
+  }
+
+  const targetCardCount = playerCount * FIXED_HAND_SIZE;
+  const dealDeck: Card[] = [];
+  for (let i = 0; i < targetCardCount; i += 1) {
+    dealDeck.push(shuffledDeck[i % shuffledDeck.length] as Card);
+  }
+  return dealDeck;
+};
+
 export const createInitialState = (config: CreateInitialStateConfig): GameState => {
   if (!validatePlayerCount(config.players.length)) {
     throw new Error('player count out of range');
@@ -22,6 +42,7 @@ export const createInitialState = (config: CreateInitialStateConfig): GameState 
 
   const seed = config.seed ?? String(config.nowServerTime);
   const shuffled = config.shuffle === false ? [...deckSource] : shuffleDeck(deckSource, seed);
+  const dealingDeck = buildDealingDeck(shuffled, config.players.length);
 
   const players = config.players.map((player, index) => ({
     userId: player.userId,
@@ -32,8 +53,8 @@ export const createInitialState = (config: CreateInitialStateConfig): GameState 
     hand: [] as Card[],
   }));
 
-  for (let i = 0; i < shuffled.length; i += 1) {
-    players[i % players.length]?.hand.push(shuffled[i] as Card);
+  for (let i = 0; i < dealingDeck.length; i += 1) {
+    players[i % players.length]?.hand.push(dealingDeck[i] as Card);
   }
 
   return {
