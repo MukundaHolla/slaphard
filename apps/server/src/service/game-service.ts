@@ -23,7 +23,24 @@ interface SocketContext {
 interface RoomTimers {
   turnTimer?: NodeJS.Timeout;
   slapTimer?: NodeJS.Timeout;
+  generation: number;
 }
+
+interface RecentResolvedSlap {
+  eventId: string;
+  resolvedAt: number;
+  participantUserIds: Set<string>;
+}
+
+const RESOLVED_SLAP_DUPLICATE_GRACE_MS = 250;
+const TIMER_NOOP_ERROR_CODES = new Set<ErrorCode>(['SLAP_WINDOW_ACTIVE', 'NO_SLAP_WINDOW', 'NOT_IN_GAME']);
+const RECOVERABLE_RESYNC_ERROR_CODES = new Set<ErrorCode>([
+  'NOT_YOUR_TURN',
+  'SLAP_WINDOW_ACTIVE',
+  'NO_SLAP_WINDOW',
+  'INVALID_EVENT_ID',
+  'ALREADY_SLAPPED',
+]);
 
 const randomCode = (): string => {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -51,8 +68,11 @@ export class GameService {
   private readonly socketContext = new Map<string, SocketContext>();
   private readonly socketsByUserId = new Map<string, Set<string>>();
   private readonly timersByRoomId = new Map<string, RoomTimers>();
+  private readonly timerGenerationByRoomId = new Map<string, number>();
   private readonly lastInputAtBySocketId = new Map<string, number>();
   private readonly activeMatchByRoomId = new Map<string, string>();
+  private readonly recentResolvedSlapByRoomId = new Map<string, RecentResolvedSlap>();
+  private readonly roomMutationQueueByRoomId = new Map<string, Promise<void>>();
 
   constructor(
     private readonly io: Server,
@@ -60,6 +80,26 @@ export class GameService {
     private readonly persistenceRepo: PersistenceRepository,
     private readonly logger: Logger,
   ) {}
+
+  private async withRoomMutationLock<T>(roomId: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.roomMutationQueueByRoomId.get(roomId) ?? Promise.resolve();
+    let release: (() => void) | undefined;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queued = previous.then(() => current);
+    this.roomMutationQueueByRoomId.set(roomId, queued);
+
+    await previous;
+    try {
+      return await task();
+    } finally {
+      release?.();
+      if (this.roomMutationQueueByRoomId.get(roomId) === queued) {
+        this.roomMutationQueueByRoomId.delete(roomId);
+      }
+    }
+  }
 
   async createRoom(socket: Socket, payload: unknown): Promise<void> {
     const parsed = clientEventsSchemas['v1:room.create'].safeParse(payload);
@@ -199,6 +239,7 @@ export class GameService {
         );
         await this.roomStore.deleteRoom(room.roomId);
         this.activeMatchByRoomId.delete(room.roomId);
+        this.recentResolvedSlapByRoomId.delete(room.roomId);
         this.clearTimers(room.roomId);
         return;
       }
@@ -244,46 +285,111 @@ export class GameService {
     await this.emitRoomState(room);
   }
 
-  async startGame(socket: Socket): Promise<void> {
-    const { room, userId } = await this.roomAndUserFromSocket(socket.id);
+  async kickFromLobby(socket: Socket, payload: unknown): Promise<void> {
+    const parsed = clientEventsSchemas['v1:lobby.kick'].safeParse(payload);
+    if (!parsed.success) {
+      throw new ServiceError('INTERNAL_ERROR', 'invalid kick payload', parsed.error.issues);
+    }
 
+    const { room, userId } = await this.roomAndUserFromSocket(socket.id);
     if (room.status !== 'LOBBY') {
-      throw new ServiceError('NOT_IN_LOBBY', 'room is not in lobby state');
+      throw new ServiceError('NOT_IN_LOBBY', 'kick can only be used in lobby');
     }
     if (room.hostUserId !== userId) {
-      throw new ServiceError('NOT_HOST', 'only host can start game');
-    }
-    if (room.players.length < MIN_PLAYERS) {
-      throw new ServiceError('NOT_IN_LOBBY', 'not enough players to start');
+      throw new ServiceError('NOT_HOST', 'only host can kick players');
     }
 
-    const now = Date.now();
-    room.gameState = createInitialState({
-      players: room.players.map((player) => ({
-        userId: player.userId,
-        displayName: player.displayName,
-        connected: player.connected,
-        ready: player.ready,
-      })),
-      nowServerTime: now,
-      seed: `${room.roomId}:${room.version}:${now}`,
+    const targetUserId = parsed.data.userId;
+    const targetIndex = room.players.findIndex((entry) => entry.userId === targetUserId);
+    if (targetIndex < 0) {
+      throw new ServiceError('INVALID_TARGET', 'kick target is not in room');
+    }
+
+    const target = room.players[targetIndex]!;
+    if (target.userId === userId || target.userId === room.hostUserId) {
+      throw new ServiceError('INVALID_TARGET', 'host cannot kick this target');
+    }
+    if (target.ready) {
+      throw new ServiceError('INVALID_TARGET', 'ready players cannot be kicked');
+    }
+
+    const targetSocketIds = [...(this.socketsByUserId.get(targetUserId) ?? [])];
+    for (const socketId of targetSocketIds) {
+      const targetSocket = this.io.sockets.sockets.get(socketId);
+      if (targetSocket) {
+        this.emitValidated(targetSocket, 'v1:room.kicked', {
+          roomCode: room.roomCode,
+          byUserId: userId,
+        });
+        targetSocket.leave(room.roomId);
+      }
+      await this.detachSocket(socketId, targetUserId);
+    }
+
+    await this.roomStore.clearUserRoom(targetUserId);
+    room.players.splice(targetIndex, 1);
+    room.players.forEach((player, index) => {
+      player.seatIndex = index;
     });
-    room.status = 'IN_GAME';
-    room.updatedAt = now;
+    room.updatedAt = Date.now();
     room.version += 1;
 
     await this.roomStore.saveRoom(room);
-    await this.persistRoomTransition(room, 'START', { userId });
-    const matchId = await this.persistWithRetry(
-      () => this.persistenceRepo.startMatch(room.roomId, new Date(now)),
-      { roomId: room.roomId, userId, action: 'startMatch' },
-    );
-    if (matchId) {
-      this.activeMatchByRoomId.set(room.roomId, matchId);
-    }
+    await this.persistRoomTransition(room, 'LEAVE', {
+      userId: targetUserId,
+      byUserId: userId,
+      reason: 'HOST_KICK',
+    });
     await this.emitRoomState(room);
-    await this.emitGameState(room);
-    this.rescheduleTimers(room);
+  }
+
+  async startGame(socket: Socket): Promise<void> {
+    const ctx = this.socketContext.get(socket.id);
+    if (!ctx) {
+      throw new ServiceError('ROOM_NOT_FOUND', 'socket has no room context');
+    }
+    await this.withRoomMutationLock(ctx.roomId, async () => {
+      const { room, userId } = await this.roomAndUserFromSocket(socket.id);
+
+      if (room.status !== 'LOBBY') {
+        throw new ServiceError('NOT_IN_LOBBY', 'room is not in lobby state');
+      }
+      if (room.hostUserId !== userId) {
+        throw new ServiceError('NOT_HOST', 'only host can start game');
+      }
+      if (room.players.length < MIN_PLAYERS) {
+        throw new ServiceError('NOT_IN_LOBBY', 'not enough players to start');
+      }
+
+      const now = Date.now();
+      room.gameState = createInitialState({
+        players: room.players.map((player) => ({
+          userId: player.userId,
+          displayName: player.displayName,
+          connected: player.connected,
+          ready: player.ready,
+        })),
+        nowServerTime: now,
+        seed: `${room.roomId}:${room.version}:${now}`,
+      });
+      room.status = 'IN_GAME';
+      room.updatedAt = now;
+      room.version += 1;
+      this.recentResolvedSlapByRoomId.delete(room.roomId);
+
+      await this.roomStore.saveRoom(room);
+      await this.persistRoomTransition(room, 'START', { userId });
+      const matchId = await this.persistWithRetry(
+        () => this.persistenceRepo.startMatch(room.roomId, new Date(now)),
+        { roomId: room.roomId, userId, action: 'startMatch' },
+      );
+      if (matchId) {
+        this.activeMatchByRoomId.set(room.roomId, matchId);
+      }
+      await this.emitRoomState(room);
+      await this.emitGameState(room);
+      this.rescheduleTimers(room);
+    });
   }
 
   async flip(socket: Socket, payload: unknown): Promise<void> {
@@ -295,41 +401,54 @@ export class GameService {
       throw new ServiceError('RATE_LIMITED', 'too many events');
     }
 
-    const { room, userId } = await this.roomAndUserFromSocket(socket.id);
-    if (!room.gameState || room.status !== 'IN_GAME') {
-      throw new ServiceError('NOT_IN_GAME', 'room not in game');
+    const ctx = this.socketContext.get(socket.id);
+    if (!ctx) {
+      throw new ServiceError('ROOM_NOT_FOUND', 'socket has no room context');
     }
+    await this.withRoomMutationLock(ctx.roomId, async () => {
+      const { room, userId } = await this.roomAndUserFromSocket(socket.id);
+      if (!room.gameState || room.status !== 'IN_GAME') {
+        throw new ServiceError('NOT_IN_GAME', 'room not in game');
+      }
 
-    const result = applyEvent(room.gameState, { type: 'FLIP', userId }, Date.now());
-    await this.consumeEngineResult(room, result.state, result.effects, result.error?.code);
+      const result = applyEvent(room.gameState, { type: 'FLIP', userId }, Date.now());
+      await this.consumeEngineResult(room, result.state, result.effects, result.error?.code);
+    });
   }
 
   async stopGame(socket: Socket): Promise<void> {
-    const { room, userId } = await this.roomAndUserFromSocket(socket.id);
-
-    if (room.status === 'LOBBY') {
-      throw new ServiceError('NOT_IN_GAME', 'room is already in lobby');
+    const ctx = this.socketContext.get(socket.id);
+    if (!ctx) {
+      throw new ServiceError('ROOM_NOT_FOUND', 'socket has no room context');
     }
-    if (room.hostUserId !== userId) {
-      throw new ServiceError('NOT_HOST', 'only host can stop the game');
-    }
+    await this.withRoomMutationLock(ctx.roomId, async () => {
+      const { room, userId } = await this.roomAndUserFromSocket(socket.id);
 
-    if (room.status === 'IN_GAME') {
-      await this.finishPersistedMatch(room, 'GAME_STOPPED');
-    }
+      if (room.status === 'LOBBY') {
+        throw new ServiceError('NOT_IN_GAME', 'room is already in lobby');
+      }
+      if (room.hostUserId !== userId) {
+        throw new ServiceError('NOT_HOST', 'only host can stop the game');
+      }
 
-    room.status = 'LOBBY';
-    room.gameState = undefined;
-    room.players.forEach((player) => {
-      player.ready = false;
+      if (room.status === 'IN_GAME') {
+        await this.finishPersistedMatch(room, 'GAME_STOPPED');
+      }
+
+      room.status = 'LOBBY';
+      room.gameState = undefined;
+      room.players.forEach((player) => {
+        player.ready = false;
+      });
+      room.updatedAt = Date.now();
+      room.version += 1;
+
+      await this.roomStore.saveRoom(room);
+      await this.persistRoomTransition(room, 'STOP', { userId });
+      this.recentResolvedSlapByRoomId.delete(room.roomId);
+      this.clearTimers(room.roomId);
+      await this.emitRoomState(room);
     });
-    room.updatedAt = Date.now();
-    room.version += 1;
-
-    await this.roomStore.saveRoom(room);
-    await this.persistRoomTransition(room, 'STOP', { userId });
-    this.clearTimers(room.roomId);
-    await this.emitRoomState(room);
   }
 
   async slap(socket: Socket, payload: unknown): Promise<void> {
@@ -341,24 +460,39 @@ export class GameService {
       throw new ServiceError('RATE_LIMITED', 'too many events');
     }
 
-    const { room, userId } = await this.roomAndUserFromSocket(socket.id);
-    if (!room.gameState || room.status !== 'IN_GAME') {
-      throw new ServiceError('NOT_IN_GAME', 'room not in game');
+    const ctx = this.socketContext.get(socket.id);
+    if (!ctx) {
+      throw new ServiceError('ROOM_NOT_FOUND', 'socket has no room context');
     }
+    await this.withRoomMutationLock(ctx.roomId, async () => {
+      const { room, userId } = await this.roomAndUserFromSocket(socket.id);
+      if (!room.gameState || room.status !== 'IN_GAME') {
+        throw new ServiceError('NOT_IN_GAME', 'room not in game');
+      }
+      const recentResolvedSlap = this.recentResolvedSlapByRoomId.get(room.roomId);
+      if (
+        recentResolvedSlap &&
+        recentResolvedSlap.eventId === parsed.data.eventId &&
+        Date.now() - recentResolvedSlap.resolvedAt <= RESOLVED_SLAP_DUPLICATE_GRACE_MS &&
+        recentResolvedSlap.participantUserIds.has(userId)
+      ) {
+        return;
+      }
 
-    const event: EngineEvent = {
-      type: 'SLAP',
-      userId,
-      eventId: parsed.data.eventId,
-      clientSeq: parsed.data.clientSeq,
-      clientTime: parsed.data.clientTime,
-      offsetMs: parsed.data.offsetMs,
-      rttMs: parsed.data.rttMs,
-      ...(isGesture(parsed.data.gesture) ? { gesture: parsed.data.gesture } : {}),
-    };
+      const event: EngineEvent = {
+        type: 'SLAP',
+        userId,
+        eventId: parsed.data.eventId,
+        clientSeq: parsed.data.clientSeq,
+        clientTime: parsed.data.clientTime,
+        offsetMs: parsed.data.offsetMs,
+        rttMs: parsed.data.rttMs,
+        ...(isGesture(parsed.data.gesture) ? { gesture: parsed.data.gesture } : {}),
+      };
 
-    const result = applyEvent(room.gameState, event, Date.now());
-    await this.consumeEngineResult(room, result.state, result.effects, result.error?.code);
+      const result = applyEvent(room.gameState, event, Date.now());
+      await this.consumeEngineResult(room, result.state, result.effects, result.error?.code);
+    });
   }
 
   async ping(socket: Socket, payload: unknown): Promise<void> {
@@ -452,6 +586,11 @@ export class GameService {
       }
 
       if (effect.type === 'SLAP_RESULT') {
+        this.recentResolvedSlapByRoomId.set(room.roomId, {
+          eventId: effect.eventId,
+          resolvedAt: Date.now(),
+          participantUserIds: new Set([...effect.orderedUserIds, effect.loserUserId]),
+        });
         await this.appendMatchEvent(room.roomId, 'SLAP_RESULT', effect);
         this.emitRoomBroadcast(room.roomId, 'v1:game.slapResult', {
           eventId: effect.eventId,
@@ -562,8 +701,8 @@ export class GameService {
     this.io.to(roomId).emit(eventName, parsed.data);
   }
 
-  private async emitRoomState(room: RoomState): Promise<void> {
-    const roomPublic = {
+  private buildRoomPublic(room: RoomState) {
+    return {
       roomId: room.roomId,
       roomCode: room.roomCode,
       status: room.status,
@@ -573,6 +712,10 @@ export class GameService {
       createdAt: room.createdAt,
       updatedAt: room.updatedAt,
     };
+  }
+
+  private async emitRoomState(room: RoomState): Promise<void> {
+    const roomPublic = this.buildRoomPublic(room);
 
     for (const player of room.players) {
       const socketIds = this.socketsByUserId.get(player.userId);
@@ -591,6 +734,41 @@ export class GameService {
         });
       }
     }
+  }
+
+  private async emitStateToSocketIfInRoom(socketId: string): Promise<void> {
+    const ctx = this.socketContext.get(socketId);
+    if (!ctx) {
+      return;
+    }
+    const socket = this.io.sockets.sockets.get(socketId);
+    if (!socket) {
+      return;
+    }
+    const room = await this.roomStore.getRoomById(ctx.roomId);
+    if (!room) {
+      return;
+    }
+    const player = room.players.find((entry) => entry.userId === ctx.userId);
+    if (!player) {
+      return;
+    }
+
+    this.emitValidated(socket, 'v1:room.state', {
+      room: this.buildRoomPublic(room),
+      meUserId: player.userId,
+    });
+
+    if (!room.gameState) {
+      return;
+    }
+
+    const snapshot = buildGameStateView(room.gameState, player.userId);
+    this.emitValidated(socket, 'v1:game.state', {
+      snapshot,
+      serverTime: Date.now(),
+      version: room.gameState.version,
+    });
   }
 
   private async emitGameState(room: RoomState): Promise<void> {
@@ -620,9 +798,12 @@ export class GameService {
     }
   }
 
-  private clearTimers(roomId: string): void {
+  private clearTimers(roomId: string, clearGeneration = true): void {
     const timers = this.timersByRoomId.get(roomId);
     if (!timers) {
+      if (clearGeneration) {
+        this.timerGenerationByRoomId.delete(roomId);
+      }
       return;
     }
     if (timers.turnTimer) {
@@ -632,50 +813,81 @@ export class GameService {
       clearTimeout(timers.slapTimer);
     }
     this.timersByRoomId.delete(roomId);
+    if (clearGeneration) {
+      this.timerGenerationByRoomId.delete(roomId);
+    }
   }
 
   private rescheduleTimers(room: RoomState): void {
-    this.clearTimers(room.roomId);
+    const generation = (this.timerGenerationByRoomId.get(room.roomId) ?? 0) + 1;
+    this.clearTimers(room.roomId, false);
+    this.timerGenerationByRoomId.set(room.roomId, generation);
 
     if (room.status !== 'IN_GAME' || !room.gameState) {
       return;
     }
 
-    const timers: RoomTimers = {};
+    const timers: RoomTimers = { generation };
     if (room.gameState.slapWindow.active && !room.gameState.slapWindow.resolved) {
       const deadline = room.gameState.slapWindow.deadlineServerTime ?? Date.now();
       const delay = Math.max(0, deadline - Date.now());
       timers.slapTimer = setTimeout(() => {
-        void this.resolveSlapWindowTimeout(room.roomId);
+        void this.resolveSlapWindowTimeout(room.roomId, generation).catch((error: unknown) => {
+          this.logger.error({ roomId: room.roomId, generation, error }, 'slap timer callback failed');
+        });
       }, delay);
     } else {
       const timeoutMs = room.gameState.config.turnTimeoutMs;
       timers.turnTimer = setTimeout(() => {
-        void this.resolveTurnTimeout(room.roomId);
+        void this.resolveTurnTimeout(room.roomId, generation).catch((error: unknown) => {
+          this.logger.error({ roomId: room.roomId, generation, error }, 'turn timer callback failed');
+        });
       }, timeoutMs);
     }
 
     this.timersByRoomId.set(room.roomId, timers);
   }
 
-  private async resolveSlapWindowTimeout(roomId: string): Promise<void> {
-    const room = await this.roomStore.getRoomById(roomId);
-    if (!room || !room.gameState || !room.gameState.slapWindow.active || room.status !== 'IN_GAME') {
+  private async resolveSlapWindowTimeout(roomId: string, generation?: number): Promise<void> {
+    if (generation !== undefined && this.timerGenerationByRoomId.get(roomId) !== generation) {
       return;
     }
+    await this.withRoomMutationLock(roomId, async () => {
+      if (generation !== undefined && this.timerGenerationByRoomId.get(roomId) !== generation) {
+        return;
+      }
+      const room = await this.roomStore.getRoomById(roomId);
+      if (!room || !room.gameState || !room.gameState.slapWindow.active || room.status !== 'IN_GAME') {
+        return;
+      }
 
-    const result = applyEvent(room.gameState, { type: 'RESOLVE_SLAP_WINDOW' }, Date.now());
-    await this.consumeEngineResult(room, result.state, result.effects, result.error?.code);
+      const result = applyEvent(room.gameState, { type: 'RESOLVE_SLAP_WINDOW' }, Date.now());
+      if (result.error?.code && TIMER_NOOP_ERROR_CODES.has(result.error.code)) {
+        return;
+      }
+      await this.consumeEngineResult(room, result.state, result.effects, result.error?.code);
+    });
   }
 
-  private async resolveTurnTimeout(roomId: string): Promise<void> {
-    const room = await this.roomStore.getRoomById(roomId);
-    if (!room || !room.gameState || room.status !== 'IN_GAME') {
+  private async resolveTurnTimeout(roomId: string, generation?: number): Promise<void> {
+    if (generation !== undefined && this.timerGenerationByRoomId.get(roomId) !== generation) {
       return;
     }
+    await this.withRoomMutationLock(roomId, async () => {
+      if (generation !== undefined && this.timerGenerationByRoomId.get(roomId) !== generation) {
+        return;
+      }
+      const room = await this.roomStore.getRoomById(roomId);
+      if (!room || !room.gameState || room.status !== 'IN_GAME') {
+        return;
+      }
 
-    const result = applyEvent(room.gameState, { type: 'TURN_TIMEOUT' }, Date.now());
-    await this.consumeEngineResult(room, result.state, result.effects, result.error?.code);
+      const result = applyEvent(room.gameState, { type: 'TURN_TIMEOUT' }, Date.now());
+      if (result.error?.code && TIMER_NOOP_ERROR_CODES.has(result.error.code)) {
+        return;
+      }
+      await this.consumeEngineResult(room, result.state, result.effects, result.error?.code);
+    });
   }
 
   emitError(socket: Socket, code: ErrorCode, message: string, details?: unknown): void {
@@ -685,6 +897,11 @@ export class GameService {
   handleFailure(socket: Socket, error: unknown): void {
     if (error instanceof ServiceError) {
       this.emitError(socket, error.code, error.message, error.details);
+      if (RECOVERABLE_RESYNC_ERROR_CODES.has(error.code)) {
+        void this.emitStateToSocketIfInRoom(socket.id).catch((resyncError: unknown) => {
+          this.logger.warn({ socketId: socket.id, errorCode: error.code, error: resyncError }, 'socket resync failed');
+        });
+      }
       return;
     }
 

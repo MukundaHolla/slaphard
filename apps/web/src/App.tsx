@@ -4,12 +4,11 @@ import {
   initAudio,
   playClickSound,
   playFlipSound,
-  playSlapSound,
   playWinnerCelebrationSound,
   unlockAudio,
 } from './audio';
 import { createSocketApi, type SocketApi } from './socket';
-import { getPersistedIdentity, useAppStore } from './store';
+import { useAppStore } from './store';
 
 const gestureOptions: Gesture[] = ['GORILLA', 'NARWHAL', 'GROUNDHOG'];
 
@@ -88,9 +87,14 @@ export const App = () => {
   const [mobileStatsOpen, setMobileStatsOpen] = useState(false);
 
   const socketStatus = useAppStore((s) => s.socketStatus);
+  const rejoinState = useAppStore((s) => s.rejoinState);
+  const rejoinError = useAppStore((s) => s.rejoinError);
   const roomState = useAppStore((s) => s.roomState);
   const gameState = useAppStore((s) => s.gameState);
+  const lastGameStateAt = useAppStore((s) => s.lastGameStateAt);
+  const lastCardTakerUserId = useAppStore((s) => s.lastCardTakerUserId);
   const displayName = useAppStore((s) => s.displayName);
+  const persistedRoomCode = useAppStore((s) => s.persistedRoomCode);
   const meUserId = useAppStore((s) => s.meUserId);
   const feed = useAppStore((s) => s.feed);
   const pingIntervalMs = useAppStore((s) => s.timeSync.pingIntervalMs);
@@ -134,19 +138,6 @@ export const App = () => {
 
     return () => clearInterval(id);
   }, [pingIntervalMs, socketStatus]);
-
-  useEffect(() => {
-    if (socketStatus !== 'connected' || roomState) {
-      return;
-    }
-
-    const persisted = getPersistedIdentity();
-    if (!persisted.roomCode || !persisted.displayName) {
-      return;
-    }
-
-    apiRef.current?.joinRoom(persisted.roomCode, persisted.displayName, persisted.userId);
-  }, [roomState, socketStatus]);
 
   useEffect(() => {
     const onPointer = () => unlockAudio();
@@ -238,13 +229,16 @@ export const App = () => {
     if (!gameState || gameState.status !== 'IN_GAME') {
       return;
     }
-    playSlapSound();
     const activeEventId =
       gameState.slapWindow.active && !gameState.slapWindow.resolved && gameState.slapWindow.eventId
         ? gameState.slapWindow.eventId
-        : createClientEventId();
-    apiRef.current?.slap(activeEventId, isActionWindow ? selectedGesture : undefined);
-  }, [gameState, isActionWindow, selectedGesture]);
+        : undefined;
+    if (activeEventId && submittedSlapEventId === activeEventId) {
+      return;
+    }
+    const eventId = activeEventId ?? createClientEventId();
+    apiRef.current?.slap(eventId, isActionWindow ? selectedGesture : undefined);
+  }, [gameState, isActionWindow, selectedGesture, submittedSlapEventId]);
 
   const submitCreateRoom = useCallback(() => {
     if (!canCreateRoom) {
@@ -265,6 +259,9 @@ export const App = () => {
       if (event.code !== 'Space') {
         return;
       }
+      if (event.repeat) {
+        return;
+      }
       event.preventDefault();
       submitSlap();
     };
@@ -282,11 +279,23 @@ export const App = () => {
   }, [feedCollapsed, setFeedCollapsed]);
 
   if (!roomState) {
+    if (rejoinState === 'attempting' && persistedRoomCode) {
+      return (
+        <main className="home-shell">
+          <section className="home-card">
+            <h2>Reconnecting...</h2>
+            <p className="muted">Rejoining room {persistedRoomCode}. Syncing latest game state.</p>
+          </section>
+        </main>
+      );
+    }
+
     return (
       <main className="home-shell">
         <section className="home-card">
           <h1>SlapHard</h1>
           <p className="muted">Socket: {socketStatus}</p>
+          {rejoinState === 'failed' && rejoinError ? <p className="muted">{rejoinError}</p> : null}
 
           {homeStep === 'identity' ? (
             <section className="home-step">
@@ -394,7 +403,17 @@ export const App = () => {
                 <span>{player.displayName}</span>
                 <span>{player.connected ? 'online' : 'offline'}</span>
                 <span>{player.ready ? 'ready' : 'not ready'}</span>
-                <span>{roomState.hostUserId === player.userId ? 'host' : ''}</span>
+                <span className="player-actions">
+                  {roomState.hostUserId === player.userId ? 'host' : null}
+                  {isHost && roomState.hostUserId !== player.userId && !player.ready ? (
+                    <button
+                      className="btn lobby-kick"
+                      onClick={() => apiRef.current?.kickFromLobby(player.userId)}
+                    >
+                      Kick
+                    </button>
+                  ) : null}
+                </span>
               </li>
             ))}
           </ul>
@@ -419,6 +438,22 @@ export const App = () => {
               New Room
             </button>
           </div>
+        </section>
+      </main>
+    );
+  }
+
+  if (roomState.status === 'IN_GAME' && socketStatus !== 'connected') {
+    const lastUpdateSeconds =
+      lastGameStateAt !== undefined ? Math.max(0, Math.floor((Date.now() - lastGameStateAt) / 1000)) : undefined;
+    return (
+      <main className="home-shell">
+        <section className="home-card">
+          <h2>Reconnecting To Game...</h2>
+          <p className="muted">Connection dropped. Re-syncing room {roomState.roomCode}.</p>
+          {lastUpdateSeconds !== undefined ? (
+            <p className="muted">Last game-state update: {lastUpdateSeconds}s ago.</p>
+          ) : null}
         </section>
       </main>
     );
@@ -497,13 +532,15 @@ export const App = () => {
       : !isMyTurn
         ? 'Not your turn.'
         : '';
-  const myPlace = (() => {
-    const latestResult = feed.find((entry) => entry.startsWith('slap result:'));
-    if (!latestResult) {
+  const currentTurnName =
+    gameState.players.find((player) => player.seatIndex === gameState.currentTurnSeat)?.displayName ??
+    `Seat ${gameState.currentTurnSeat}`;
+  const lastCardTakerLabel = (() => {
+    if (!lastCardTakerUserId) {
       return 'none';
     }
-    const found = latestResult.match(/you=(\w+)/);
-    return found?.[1] ?? 'none';
+    const known = gameState.players.find((player) => player.userId === lastCardTakerUserId);
+    return known?.displayName ?? lastCardTakerUserId.slice(0, 8);
   })();
 
   return (
@@ -525,7 +562,7 @@ export const App = () => {
             </div>
             <div className="status-micro-chip">
               <strong>Turn</strong>
-              <span>Seat {gameState.currentTurnSeat}</span>
+              <span>{currentTurnName}</span>
             </div>
             <div className="status-micro-chip">
               <strong>Pile</strong>
@@ -539,13 +576,24 @@ export const App = () => {
 
           <section className="action-zone compact">
             <div className="card-preview chant-card">
-              <p>Chant</p>
+              <p>Current Card</p>
               <h3>{cardBadge(currentChant)}</h3>
             </div>
 
             <div className="card-preview">
-              <p>Last Revealed</p>
+              <p>Last Card</p>
               <h3>{cardBadge(gameState.lastRevealed?.card)}</h3>
+            </div>
+          </section>
+
+          <section className="action-reference" aria-label="Special card reference">
+            <p>Special Cards</p>
+            <div className="action-reference-grid">
+              {gestureOptions.map((gesture) => (
+                <span key={gesture} className="action-reference-chip">
+                  {cardBadge(gesture)}
+                </span>
+              ))}
             </div>
           </section>
 
@@ -555,8 +603,8 @@ export const App = () => {
               <strong>{me?.handCount ?? 0}</strong>
             </div>
             <div className="stat-pill">
-              <span className="stat-label">Last Slap Place</span>
-              <strong>{myPlace}</strong>
+              <span className="stat-label">Last Card Taker</span>
+              <strong>{lastCardTakerLabel}</strong>
             </div>
           </section>
 

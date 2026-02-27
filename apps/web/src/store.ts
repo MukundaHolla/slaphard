@@ -3,6 +3,7 @@ import { PING_INTERVAL_IN_GAME_MS, PING_INTERVAL_LOBBY_MS, type Gesture } from '
 import type { RoomState, GameStateView } from '@slaphard/shared';
 
 export type SocketStatus = 'disconnected' | 'connecting' | 'connected';
+export type RejoinState = 'idle' | 'attempting' | 'failed';
 
 interface TimeSyncState {
   offsetAvg: number;
@@ -22,9 +23,13 @@ interface UiState {
 
 interface AppState {
   socketStatus: SocketStatus;
+  rejoinState: RejoinState;
+  rejoinError: string | undefined;
   meUserId: string | undefined;
   roomState: RoomState | undefined;
   gameState: GameStateView | undefined;
+  lastGameStateAt: number | undefined;
+  lastCardTakerUserId: string | undefined;
   displayName: string;
   persistedRoomCode: string | undefined;
   feed: string[];
@@ -33,12 +38,14 @@ interface AppState {
   ui: UiState;
 
   setSocketStatus: (status: SocketStatus) => void;
+  setRejoinState: (state: RejoinState, error?: string) => void;
   setDisplayName: (displayName: string) => void;
   setRoomCodeInput: (code: string) => void;
   setHomeStep: (step: UiState['homeStep']) => void;
   setHomeMode: (mode: UiState['homeMode']) => void;
   setRoomState: (room: RoomState, meUserId: string) => void;
   setGameState: (state: GameStateView) => void;
+  setLastCardTaker: (userId?: string) => void;
   setSelectedGesture: (gesture?: Gesture) => void;
   markSlapSubmitted: (eventId: string) => void;
   clearSlapSubmission: () => void;
@@ -124,12 +131,21 @@ const persistedFeedCollapsed = (): boolean => {
 };
 
 export const useAppStore = create<AppState>((set, get) => ({
+  ...(function initialRejoinState() {
+    const identity = getPersistedIdentity();
+    return {
+      displayName: identity.displayName ?? '',
+      persistedRoomCode: identity.roomCode,
+      rejoinState: identity.roomCode && identity.displayName ? ('attempting' as const) : ('idle' as const),
+    };
+  })(),
   socketStatus: 'disconnected',
+  rejoinError: undefined,
   meUserId: undefined,
   roomState: undefined,
   gameState: undefined,
-  displayName: getPersistedIdentity().displayName ?? '',
-  persistedRoomCode: getPersistedIdentity().roomCode,
+  lastGameStateAt: undefined,
+  lastCardTakerUserId: undefined,
   feed: [],
   clientSeq: 0,
   timeSync: {
@@ -149,6 +165,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setSocketStatus: (socketStatus) => set({ socketStatus }),
 
+  setRejoinState: (rejoinState, rejoinError) => set({ rejoinState, rejoinError }),
+
   setDisplayName: (displayName) => {
     persistIdentity({ displayName, roomCode: undefined, userId: undefined });
     set({ displayName });
@@ -167,13 +185,24 @@ export const useAppStore = create<AppState>((set, get) => ({
       meUserId,
       persistedRoomCode: roomState.roomCode,
       gameState: roomState.status === 'LOBBY' ? undefined : state.gameState,
+      lastGameStateAt: roomState.status === 'LOBBY' ? undefined : state.lastGameStateAt,
+      lastCardTakerUserId: roomState.status === 'LOBBY' ? undefined : state.lastCardTakerUserId,
+      rejoinState: 'idle',
+      rejoinError: undefined,
     }));
   },
 
   setGameState: (gameState) => {
     const pingIntervalMs = gameState.status === 'IN_GAME' ? PING_INTERVAL_IN_GAME_MS : PING_INTERVAL_LOBBY_MS;
-    set((state) => ({ gameState, timeSync: { ...state.timeSync, pingIntervalMs } }));
+    set((state) => ({
+      gameState,
+      lastGameStateAt: Date.now(),
+      timeSync: { ...state.timeSync, pingIntervalMs },
+      lastCardTakerUserId: gameState.status === 'IN_GAME' ? state.lastCardTakerUserId : undefined,
+    }));
   },
+
+  setLastCardTaker: (lastCardTakerUserId) => set({ lastCardTakerUserId }),
 
   setSelectedGesture: (selectedGesture) => set((state) => ({ ui: { ...state.ui, selectedGesture } })),
 
@@ -197,7 +226,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({
       roomState: undefined,
       gameState: undefined,
+      lastGameStateAt: undefined,
+      lastCardTakerUserId: undefined,
       persistedRoomCode: undefined,
+      rejoinState: 'idle',
+      rejoinError: undefined,
       ui: {
         roomCodeInput: '',
         homeStep: 'identity',
