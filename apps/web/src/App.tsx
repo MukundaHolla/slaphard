@@ -93,6 +93,7 @@ export const App = () => {
   const gameState = useAppStore((s) => s.gameState);
   const lastGameStateAt = useAppStore((s) => s.lastGameStateAt);
   const lastCardTakerUserId = useAppStore((s) => s.lastCardTakerUserId);
+  const lastCardTakerPileTaken = useAppStore((s) => s.lastCardTakerPileTaken);
   const displayName = useAppStore((s) => s.displayName);
   const persistedRoomCode = useAppStore((s) => s.persistedRoomCode);
   const meUserId = useAppStore((s) => s.meUserId);
@@ -553,7 +554,11 @@ export const App = () => {
       return 'none';
     }
     const known = gameState.players.find((player) => player.userId === lastCardTakerUserId);
-    return known?.displayName ?? lastCardTakerUserId.slice(0, 8);
+    const name = known?.displayName ?? lastCardTakerUserId.slice(0, 8);
+    if (lastCardTakerPileTaken === undefined) {
+      return name;
+    }
+    return `${name} (+${lastCardTakerPileTaken})`;
   })();
 
   return (
@@ -668,12 +673,12 @@ export const App = () => {
             {slapActive && submittedSlapEventId === gameState.slapWindow.eventId ? (
               <p className="muted">You already slapped this event. Extra slaps are ignored.</p>
             ) : null}
-            {slapActive && gameState.slapWindow.reason === 'SAME_CARD' ? (
+            {slapActive && gameState.slapWindow.reason === 'SAME_CARD' && pendingConnectedSlappers.length > 0 ? (
               <p className="muted">
                 Same card round: waiting for every connected player to slap. Pending: {pendingConnectedSlappersLabel}.
               </p>
             ) : null}
-            {slapActive && gameState.slapWindow.reason === 'ACTION' ? (
+            {slapActive && gameState.slapWindow.reason === 'ACTION' && pendingConnectedSlappers.length > 0 ? (
               <p className="muted">
                 Action round: waiting for every connected player to slap before next flip. Pending:{' '}
                 {pendingConnectedSlappersLabel}.
@@ -688,6 +693,11 @@ export const App = () => {
             {isHost ? (
               <button className="btn danger" onClick={() => apiRef.current?.stopGame()}>
                 Stop Game
+              </button>
+            ) : null}
+            {isHost ? (
+              <button className="btn" disabled={!slapActive} onClick={() => apiRef.current?.skipSlapWindow()}>
+                Skip Slap Round
               </button>
             ) : null}
             <button className="btn" onClick={leaveToHome}>

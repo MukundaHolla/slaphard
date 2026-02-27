@@ -19,6 +19,10 @@ export type EngineEvent =
       type: 'RESOLVE_SLAP_WINDOW';
     }
   | {
+      type: 'SKIP_SLAP_WINDOW';
+      userId: string;
+    }
+  | {
       type: 'TURN_TIMEOUT';
     };
 
@@ -38,6 +42,7 @@ export type EngineEffect =
       orderedUserIds: string[];
       loserUserId: string;
       reason: string;
+      pileTaken: number;
     }
   | {
       type: 'PENALTY';

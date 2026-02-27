@@ -29,6 +29,7 @@ export interface SocketApi {
   kickFromLobby: (userId: string) => void;
   startGame: () => void;
   stopGame: () => void;
+  skipSlapWindow: () => void;
   flip: () => void;
   slap: (eventId: string, gesture?: Gesture) => void;
   ping: () => void;
@@ -153,7 +154,7 @@ export const createSocketApi = (): SocketApi => {
     const place = me ? data.orderedUserIds.findIndex((id: string) => id === me) : -1;
     const placeText = place >= 0 ? `${place + 1}${place === 0 ? 'st' : place === 1 ? 'nd' : 'th'}` : 'none';
     const store = useAppStore.getState();
-    store.setLastCardTaker(data.loserUserId);
+    store.setLastCardTaker(data.loserUserId, data.pileTaken);
     store.pushFeed(`slap result: you=${placeText}, loser=${data.loserUserId.slice(0, 6)}`);
     store.clearSlapSubmission();
   });
@@ -182,7 +183,7 @@ export const createSocketApi = (): SocketApi => {
       }
     }
     const store = useAppStore.getState();
-    store.setLastCardTaker(data.userId);
+    store.setLastCardTaker(data.userId, data.pileTaken);
     store.pushFeed(`penalty: ${data.type} on ${data.userId.slice(0, 6)}`);
   });
 
@@ -221,6 +222,7 @@ export const createSocketApi = (): SocketApi => {
     kickFromLobby: (userId: string) => emitValidated(socket, 'v1:lobby.kick', { userId }),
     startGame: () => emitValidated(socket, 'v1:lobby.start', {}),
     stopGame: () => emitValidated(socket, 'v1:game.stop', {}),
+    skipSlapWindow: () => emitValidated(socket, 'v1:game.skipSlap', {}),
     flip: () => {
       const seq = useAppStore.getState().nextClientSeq();
       emitValidated(socket, 'v1:game.flip', {

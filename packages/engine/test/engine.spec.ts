@@ -359,6 +359,27 @@ describe('engine', () => {
     });
   });
 
+  it('skips an unresolved slap window without awarding pile cards', () => {
+    let state = createInitialState({
+      players,
+      deck: ['GORILLA', 'CAT', 'GOAT', 'CHEESE'],
+      seed: 1,
+      shuffle: false,
+      nowServerTime: 1000,
+    });
+
+    state = applyEvent(state, { type: 'FLIP', userId: 'u1' }, 1010).state;
+    expect(state.slapWindow.active).toBe(true);
+    expect(state.pileCount).toBe(1);
+    expect(state.currentTurnSeat).toBe(0);
+
+    const skipped = applyEvent(state, { type: 'SKIP_SLAP_WINDOW', userId: 'u1' }, 1020);
+    expect(skipped.error).toBeUndefined();
+    expect(skipped.state.slapWindow.active).toBe(false);
+    expect(skipped.state.pileCount).toBe(0);
+    expect(skipped.state.currentTurnSeat).toBe(1);
+  });
+
   it('applies immediate wrong-gesture penalty', () => {
     let state = createInitialState({
       players,

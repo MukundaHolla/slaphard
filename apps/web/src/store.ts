@@ -30,6 +30,7 @@ interface AppState {
   gameState: GameStateView | undefined;
   lastGameStateAt: number | undefined;
   lastCardTakerUserId: string | undefined;
+  lastCardTakerPileTaken: number | undefined;
   displayName: string;
   persistedRoomCode: string | undefined;
   feed: string[];
@@ -45,7 +46,7 @@ interface AppState {
   setHomeMode: (mode: UiState['homeMode']) => void;
   setRoomState: (room: RoomState, meUserId: string) => void;
   setGameState: (state: GameStateView) => void;
-  setLastCardTaker: (userId?: string) => void;
+  setLastCardTaker: (userId?: string, pileTaken?: number) => void;
   setSelectedGesture: (gesture?: Gesture) => void;
   markSlapSubmitted: (eventId: string) => void;
   clearSlapSubmission: () => void;
@@ -146,6 +147,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   gameState: undefined,
   lastGameStateAt: undefined,
   lastCardTakerUserId: undefined,
+  lastCardTakerPileTaken: undefined,
   feed: [],
   clientSeq: 0,
   timeSync: {
@@ -187,6 +189,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       gameState: roomState.status === 'LOBBY' ? undefined : state.gameState,
       lastGameStateAt: roomState.status === 'LOBBY' ? undefined : state.lastGameStateAt,
       lastCardTakerUserId: roomState.status === 'LOBBY' ? undefined : state.lastCardTakerUserId,
+      lastCardTakerPileTaken: roomState.status === 'LOBBY' ? undefined : state.lastCardTakerPileTaken,
       rejoinState: 'idle',
       rejoinError: undefined,
     }));
@@ -199,10 +202,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       lastGameStateAt: Date.now(),
       timeSync: { ...state.timeSync, pingIntervalMs },
       lastCardTakerUserId: gameState.status === 'IN_GAME' ? state.lastCardTakerUserId : undefined,
+      lastCardTakerPileTaken: gameState.status === 'IN_GAME' ? state.lastCardTakerPileTaken : undefined,
     }));
   },
 
-  setLastCardTaker: (lastCardTakerUserId) => set({ lastCardTakerUserId }),
+  setLastCardTaker: (lastCardTakerUserId, lastCardTakerPileTaken) =>
+    set({ lastCardTakerUserId, lastCardTakerPileTaken }),
 
   setSelectedGesture: (selectedGesture) => set((state) => ({ ui: { ...state.ui, selectedGesture } })),
 
@@ -228,6 +233,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       gameState: undefined,
       lastGameStateAt: undefined,
       lastCardTakerUserId: undefined,
+      lastCardTakerPileTaken: undefined,
       persistedRoomCode: undefined,
       rejoinState: 'idle',
       rejoinError: undefined,

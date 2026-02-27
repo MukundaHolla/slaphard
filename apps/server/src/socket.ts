@@ -54,6 +54,12 @@ export const attachSocketHandlers = (io: Server, gameService: GameService, logge
       });
     });
 
+    socket.on('v1:game.skipSlap', (payload) => {
+      void gameService.skipSlapWindow(socket, payload).catch((error: unknown) => {
+        gameService.handleFailure(socket, error);
+      });
+    });
+
     socket.on('v1:game.slap', (payload) => {
       void gameService.slap(socket, payload).catch((error: unknown) => {
         gameService.handleFailure(socket, error);

@@ -105,6 +105,7 @@ const resolveSlapWindowInternal = (state: GameState): { effects: EngineEffect[] 
       orderedUserIds,
       loserUserId,
       reason: 'NO_SLAPS',
+      pileTaken,
     });
 
     resetSlapWindow(state);
@@ -124,6 +125,7 @@ const resolveSlapWindowInternal = (state: GameState): { effects: EngineEffect[] 
       ? nonSlappers[nonSlappers.length - 1]!
       : orderedUserIds[orderedUserIds.length - 1]!;
   const slapResultReason = sameCardWindow ? 'LAST_SLAPPER' : nonSlappers.length > 0 ? 'NON_SLAPPER' : 'LAST_SLAPPER';
+  const pileTaken = state.pile.length;
 
   effects.push({
     type: 'SLAP_RESULT',
@@ -131,6 +133,7 @@ const resolveSlapWindowInternal = (state: GameState): { effects: EngineEffect[] 
     orderedUserIds,
     loserUserId,
     reason: slapResultReason,
+    pileTaken,
   });
 
   if (winnerUserId) {
@@ -196,6 +199,16 @@ export const validateEvent = (state: GameState, event: EngineEvent): ValidationR
     }
     if (state.slapWindow.active && !state.slapWindow.resolved) {
       return { ok: false, code: 'SLAP_WINDOW_ACTIVE' };
+    }
+    return { ok: true };
+  }
+
+  if (event.type === 'SKIP_SLAP_WINDOW') {
+    if (state.status !== 'IN_GAME') {
+      return { ok: false, code: 'NOT_IN_GAME' };
+    }
+    if (!state.slapWindow.active || state.slapWindow.resolved) {
+      return { ok: false, code: 'NO_SLAP_WINDOW' };
     }
     return { ok: true };
   }
@@ -363,6 +376,25 @@ export const applyEvent = (state: GameState, event: EngineEvent, nowServerTime: 
     return { state: next, effects: result.effects };
   }
 
+  if (event.type === 'SKIP_SLAP_WINDOW') {
+    if (!validation.ok) {
+      return {
+        state,
+        effects: [],
+        error: engineError(validation.code, 'slap skip rejected'),
+      };
+    }
+
+    next.pile = [];
+    next.pileCount = 0;
+    delete next.pileTopCard;
+    resetSlapWindow(next);
+    next.currentTurnSeat = advanceSeat(next.currentTurnSeat, next.players.length);
+    normalizeTurnSeat(next);
+    next.version += 1;
+    return { state: next, effects: [] };
+  }
+
   const slapSeat = playerSeatByUserId(next, event.userId);
   if (slapSeat < 0) {
     return {
@@ -436,6 +468,7 @@ export const applyEvent = (state: GameState, event: EngineEvent, nowServerTime: 
           orderedUserIds: [event.userId],
           loserUserId: event.userId,
           reason: 'FIRST_VALID_SLAP_WIN',
+          pileTaken: 0,
         },
         {
           type: 'GAME_FINISHED',

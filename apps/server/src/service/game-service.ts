@@ -452,6 +452,33 @@ export class GameService {
     });
   }
 
+  async skipSlapWindow(socket: Socket, payload: unknown): Promise<void> {
+    const parsed = clientEventsSchemas['v1:game.skipSlap'].safeParse(payload);
+    if (!parsed.success) {
+      throw new ServiceError('INTERNAL_ERROR', 'invalid skip slap payload');
+    }
+    if (this.isRateLimited(socket.id)) {
+      throw new ServiceError('RATE_LIMITED', 'too many events');
+    }
+
+    const ctx = this.socketContext.get(socket.id);
+    if (!ctx) {
+      throw new ServiceError('ROOM_NOT_FOUND', 'socket has no room context');
+    }
+    await this.withRoomMutationLock(ctx.roomId, async () => {
+      const { room, userId } = await this.roomAndUserFromSocket(socket.id);
+      if (!room.gameState || room.status !== 'IN_GAME') {
+        throw new ServiceError('NOT_IN_GAME', 'room not in game');
+      }
+      if (room.hostUserId !== userId) {
+        throw new ServiceError('NOT_HOST', 'only host can skip slap round');
+      }
+
+      const result = applyEvent(room.gameState, { type: 'SKIP_SLAP_WINDOW', userId }, Date.now());
+      await this.consumeEngineResult(room, result.state, result.effects, result.error?.code);
+    });
+  }
+
   async slap(socket: Socket, payload: unknown): Promise<void> {
     const parsed = clientEventsSchemas['v1:game.slap'].safeParse(payload);
     if (!parsed.success) {
@@ -615,6 +642,7 @@ export class GameService {
           orderedUserIds: effect.orderedUserIds,
           loserUserId: effect.loserUserId,
           reason: effect.reason,
+          pileTaken: effect.pileTaken,
         });
       }
 

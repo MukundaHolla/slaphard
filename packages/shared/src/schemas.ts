@@ -84,6 +84,7 @@ export const clientEventsSchemas = {
   'v1:lobby.kick': z.object({ userId: z.string().uuid() }),
   'v1:lobby.start': z.object({}),
   'v1:game.stop': z.object({}),
+  'v1:game.skipSlap': z.object({}),
   'v1:game.flip': z.object({
     clientSeq: z.number().int().nonnegative(),
     clientTime: z.number().int().nonnegative(),
@@ -131,6 +132,7 @@ export const serverEventsSchemas = {
     orderedUserIds: z.array(z.string().uuid()),
     loserUserId: z.string().uuid(),
     reason: z.string(),
+    pileTaken: z.number().int().nonnegative(),
   }),
   'v1:penalty': z.object({
     userId: z.string().uuid(),

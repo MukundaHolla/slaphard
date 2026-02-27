@@ -104,8 +104,20 @@ const setupGame = async () => {
 
   await service.createRoom(host, { displayName: 'Host' });
   const roomPayload = latestRoomPayload(host);
+  const hostUserId = (
+    host.emitted.find((entry) => entry.event === 'v1:room.state')?.payload as { meUserId: string } | undefined
+  )?.meUserId;
   await service.joinRoom(guest, { roomCode: roomPayload.room.roomCode, displayName: 'Guest' });
   await service.startGame(host);
+
+  const room = await store.getRoomById(roomPayload.room.roomId);
+  if (room?.gameState && hostUserId) {
+    const hostSeat = room.gameState.players.find((player) => player.userId === hostUserId)?.seatIndex;
+    if (hostSeat !== undefined) {
+      room.gameState.currentTurnSeat = hostSeat;
+      await store.saveRoom(room);
+    }
+  }
 
   return { service, store, host, roomId: roomPayload.room.roomId };
 };
