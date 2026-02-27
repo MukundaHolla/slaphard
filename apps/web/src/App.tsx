@@ -537,6 +537,17 @@ export const App = () => {
   const currentTurnName =
     gameState.players.find((player) => player.seatIndex === gameState.currentTurnSeat)?.displayName ??
     `Seat ${gameState.currentTurnSeat}`;
+  const pendingConnectedSlappers = (() => {
+    if (!slapActive) {
+      return [] as string[];
+    }
+    const slappedUserIds = new Set(gameState.slapWindow.slappedUserIds);
+    return gameState.players
+      .filter((player) => player.connected && !slappedUserIds.has(player.userId))
+      .map((player) => player.displayName);
+  })();
+  const pendingConnectedSlappersLabel =
+    pendingConnectedSlappers.length > 0 ? pendingConnectedSlappers.join(', ') : 'none';
   const lastCardTakerLabel = (() => {
     if (!lastCardTakerUserId) {
       return 'none';
@@ -585,17 +596,6 @@ export const App = () => {
             <div className="card-preview">
               <p>Last Card</p>
               <h3>{cardBadge(gameState.lastRevealed?.card)}</h3>
-            </div>
-          </section>
-
-          <section className="action-reference" aria-label="Special card reference">
-            <p>Special Cards</p>
-            <div className="action-reference-grid">
-              {gestureOptions.map((gesture) => (
-                <span key={gesture} className="action-reference-chip">
-                  {cardBadge(gesture)}
-                </span>
-              ))}
             </div>
           </section>
 
@@ -669,10 +669,15 @@ export const App = () => {
               <p className="muted">You already slapped this event. Extra slaps are ignored.</p>
             ) : null}
             {slapActive && gameState.slapWindow.reason === 'SAME_CARD' ? (
-              <p className="muted">Same card round: waiting for every connected player to slap.</p>
+              <p className="muted">
+                Same card round: waiting for every connected player to slap. Pending: {pendingConnectedSlappersLabel}.
+              </p>
             ) : null}
-            {slapActive && gameState.slapWindow.reason === 'ACTION' && gameState.players.length >= 5 ? (
-              <p className="muted">Action round: waiting for all players to slap before next flip.</p>
+            {slapActive && gameState.slapWindow.reason === 'ACTION' ? (
+              <p className="muted">
+                Action round: waiting for every connected player to slap before next flip. Pending:{' '}
+                {pendingConnectedSlappersLabel}.
+              </p>
             ) : null}
             {isActionWindow && !selectedGesture ? (
               <p className="muted">No action selected. Slapping now will count as wrong gesture.</p>

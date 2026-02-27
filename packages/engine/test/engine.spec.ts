@@ -291,6 +291,74 @@ describe('engine', () => {
     });
   });
 
+  it('waits for all connected players to slap before resolving action windows', () => {
+    let state = createInitialState({
+      players: players3,
+      deck: ['GORILLA', 'CAT', 'GOAT', 'CHEESE', 'PIZZA', 'TACO'],
+      seed: 1,
+      shuffle: false,
+      nowServerTime: 1000,
+    });
+
+    state = applyEvent(state, { type: 'FLIP', userId: 'u1' }, 1010).state;
+    expect(state.slapWindow.reason).toBe('ACTION');
+    const eventId = state.slapWindow.eventId!;
+
+    const afterFirstSlap = applyEvent(
+      state,
+      {
+        type: 'SLAP',
+        userId: 'u2',
+        eventId,
+        gesture: 'GORILLA',
+        clientSeq: 1,
+        clientTime: 1030,
+        offsetMs: 0,
+        rttMs: 10,
+      },
+      1030,
+    );
+    expect(afterFirstSlap.effects.find((effect) => effect.type === 'SLAP_RESULT')).toBeUndefined();
+    expect(afterFirstSlap.state.slapWindow.active).toBe(true);
+
+    const afterSecondSlap = applyEvent(
+      afterFirstSlap.state,
+      {
+        type: 'SLAP',
+        userId: 'u3',
+        eventId,
+        gesture: 'GORILLA',
+        clientSeq: 2,
+        clientTime: 1040,
+        offsetMs: 0,
+        rttMs: 10,
+      },
+      1040,
+    );
+    expect(afterSecondSlap.effects.find((effect) => effect.type === 'SLAP_RESULT')).toBeUndefined();
+    expect(afterSecondSlap.state.slapWindow.active).toBe(true);
+
+    const afterThirdSlap = applyEvent(
+      afterSecondSlap.state,
+      {
+        type: 'SLAP',
+        userId: 'u1',
+        eventId,
+        gesture: 'GORILLA',
+        clientSeq: 3,
+        clientTime: 1050,
+        offsetMs: 0,
+        rttMs: 10,
+      },
+      1050,
+    );
+    expect(afterThirdSlap.state.slapWindow.active).toBe(false);
+    expect(afterThirdSlap.effects.find((effect) => effect.type === 'SLAP_RESULT')).toMatchObject({
+      loserUserId: 'u1',
+      reason: 'LAST_SLAPPER',
+    });
+  });
+
   it('applies immediate wrong-gesture penalty', () => {
     let state = createInitialState({
       players,

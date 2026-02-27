@@ -93,7 +93,7 @@ export interface GameStateView {
   pileCount: number;
   pileTopCard?: Card | undefined;
   lastRevealed?: LastRevealed | undefined;
-  slapWindow: Omit<SlapWindowState, 'attempts' | 'flipperSeat'>;
+  slapWindow: Omit<SlapWindowState, 'attempts' | 'flipperSeat'> & { slappedUserIds: string[] };
   winnerUserId?: string | undefined;
   version: number;
 }

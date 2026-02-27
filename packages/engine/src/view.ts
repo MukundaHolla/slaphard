@@ -6,6 +6,7 @@ export const buildGameStateView = (state: GameState, meUserId: string): GameStat
   const slapWindow = {
     active: state.slapWindow.active,
     receivedSlapsCount: state.slapWindow.receivedSlapsCount,
+    slappedUserIds: state.slapWindow.attempts.map((attempt) => attempt.userId),
     resolved: state.slapWindow.resolved,
     ...(state.slapWindow.eventId ? { eventId: state.slapWindow.eventId } : {}),
     ...(state.slapWindow.reason ? { reason: state.slapWindow.reason } : {}),

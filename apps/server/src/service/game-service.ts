@@ -372,6 +372,7 @@ export class GameService {
         nowServerTime: now,
         seed: `${room.roomId}:${room.version}:${now}`,
       });
+      room.gameState.currentTurnSeat = Math.floor(Math.random() * room.players.length);
       room.status = 'IN_GAME';
       room.updatedAt = now;
       room.version += 1;
@@ -534,6 +535,23 @@ export class GameService {
       const gamePlayer = room.gameState.players.find((entry) => entry.userId === ctx.userId);
       if (gamePlayer) {
         gamePlayer.connected = false;
+      }
+
+      if (room.gameState.slapWindow.active && !room.gameState.slapWindow.resolved) {
+        const reason = room.gameState.slapWindow.reason;
+        const requiresAllConnectedSlaps = reason === 'SAME_CARD' || reason === 'ACTION';
+        if (requiresAllConnectedSlaps) {
+          const connectedPlayers = room.gameState.players.reduce(
+            (count, participant) => count + (participant.connected ? 1 : 0),
+            0,
+          );
+          const requiredSlaps = Math.max(1, connectedPlayers);
+          if (room.gameState.slapWindow.receivedSlapsCount >= requiredSlaps) {
+            const result = applyEvent(room.gameState, { type: 'RESOLVE_SLAP_WINDOW' }, Date.now());
+            await this.consumeEngineResult(room, result.state, result.effects, result.error?.code);
+            return;
+          }
+        }
       }
     }
 
@@ -830,8 +848,7 @@ export class GameService {
     const timers: RoomTimers = { generation };
     if (room.gameState.slapWindow.active && !room.gameState.slapWindow.resolved) {
       const requireAllSlapsBeforeResolve =
-        room.gameState.slapWindow.reason === 'SAME_CARD' ||
-        (room.gameState.slapWindow.reason === 'ACTION' && room.gameState.players.length >= 5);
+        room.gameState.slapWindow.reason === 'SAME_CARD' || room.gameState.slapWindow.reason === 'ACTION';
       if (requireAllSlapsBeforeResolve) {
         this.timersByRoomId.set(room.roomId, timers);
         return;
@@ -868,8 +885,7 @@ export class GameService {
         return;
       }
       const requireAllSlapsBeforeResolve =
-        room.gameState.slapWindow.reason === 'SAME_CARD' ||
-        (room.gameState.slapWindow.reason === 'ACTION' && room.gameState.players.length >= 5);
+        room.gameState.slapWindow.reason === 'SAME_CARD' || room.gameState.slapWindow.reason === 'ACTION';
       if (requireAllSlapsBeforeResolve) {
         return;
       }

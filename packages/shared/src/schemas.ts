@@ -35,6 +35,7 @@ export const slapWindowSchema = z.object({
   deadlineServerTime: z.number().int().nonnegative().optional(),
   slapWindowMs: z.number().int().positive().optional(),
   receivedSlapsCount: z.number().int().nonnegative(),
+  slappedUserIds: z.array(z.string().uuid()),
   resolved: z.boolean(),
 });
 

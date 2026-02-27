@@ -445,7 +445,8 @@ export const applyEvent = (state: GameState, event: EngineEvent, nowServerTime: 
     };
   }
 
-  const requiredSlaps = activeWindow.reason === 'SAME_CARD'
+  const requiresAllConnectedSlaps = activeWindow.reason === 'SAME_CARD' || activeWindow.reason === 'ACTION';
+  const requiredSlaps = requiresAllConnectedSlaps
     ? Math.max(
         1,
         next.players.reduce((count, player) => count + (player.connected ? 1 : 0), 0),
