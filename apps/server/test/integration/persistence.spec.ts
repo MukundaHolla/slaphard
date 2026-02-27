@@ -72,6 +72,21 @@ const wait = async (ms: number): Promise<void> => {
   await new Promise((resolve) => setTimeout(resolve, ms));
 };
 
+const expectNoEvent = async <T>(socket: Socket, event: string, ms: number): Promise<void> => {
+  await new Promise<void>((resolve, reject) => {
+    const handler = (payload: T) => {
+      clearTimeout(timer);
+      socket.off(event, handler);
+      reject(new Error(`unexpected ${event}: ${JSON.stringify(payload)}`));
+    };
+    const timer = setTimeout(() => {
+      socket.off(event, handler);
+      resolve();
+    }, ms);
+    socket.on(event, handler);
+  });
+};
+
 describe('persistence integration', () => {
   const cleanups: Array<() => Promise<void>> = [];
 
@@ -141,12 +156,13 @@ describe('persistence integration', () => {
       throw new Error('players not found');
     }
 
-    host.hand = ['TACO'];
+    host.hand = ['TACO', 'CAT'];
     guest.hand = [];
     room.gameState.currentTurnSeat = host.seatIndex;
     room.gameState.chantIndex = 0;
     room.gameState.pile = [];
     room.gameState.pileCount = 0;
+    room.gameState.config.slapWindowMs = 100;
     room.gameState.slapWindow = {
       active: false,
       receivedSlapsCount: 0,
@@ -211,6 +227,159 @@ describe('persistence integration', () => {
     expect(roomState.room.status).toBe('LOBBY');
   });
 
+  it('allows host to kick a non-ready player from lobby', async () => {
+    const repo = new RecordingPersistenceRepo();
+    const { url } = await boot(repo);
+
+    const a = ioClient(url, { transports: ['websocket'] });
+    const b = ioClient(url, { transports: ['websocket'] });
+
+    cleanups.push(async () => {
+      a.disconnect();
+      b.disconnect();
+    });
+
+    await Promise.all([once(a, 'connect'), once(b, 'connect')]);
+
+    const createdState = once<{ room: RoomState; meUserId: string }>(a, 'v1:room.state');
+    a.emit('v1:room.create', { displayName: 'AA' });
+    const created = await createdState;
+
+    const joinedState = once<{ room: RoomState; meUserId: string }>(
+      b,
+      'v1:room.state',
+      (payload) => payload.room.roomCode === created.room.roomCode,
+    );
+    const lobbyUpdateAfterJoin = once<{ room: RoomState }>(
+      a,
+      'v1:room.state',
+      (payload) => payload.room.roomCode === created.room.roomCode && payload.room.players.length === 2,
+    );
+    b.emit('v1:room.join', { roomCode: created.room.roomCode, displayName: 'BB' });
+    const joined = await joinedState;
+    await lobbyUpdateAfterJoin;
+
+    const kickedNotice = once<{ roomCode: string; byUserId: string }>(b, 'v1:room.kicked');
+    const lobbyAfterKick = once<{ room: RoomState }>(
+      a,
+      'v1:room.state',
+      (payload) => payload.room.roomCode === created.room.roomCode && payload.room.players.length === 1,
+    );
+
+    a.emit('v1:lobby.kick', { userId: joined.meUserId });
+    const kicked = await kickedNotice;
+    const updated = await lobbyAfterKick;
+
+    expect(kicked.roomCode).toBe(created.room.roomCode);
+    expect(kicked.byUserId).toBe(created.meUserId);
+    expect(updated.room.players).toHaveLength(1);
+    expect(updated.room.players[0]?.userId).toBe(created.meUserId);
+
+    const kickedClientError = once<{ code: string }>(b, 'v1:error');
+    b.emit('v1:lobby.ready', { ready: true });
+    const errorPayload = await kickedClientError;
+    expect(errorPayload.code).toBe('ROOM_NOT_FOUND');
+  });
+
+  it('rejects host kick when target is ready', async () => {
+    const repo = new RecordingPersistenceRepo();
+    const { url } = await boot(repo);
+
+    const a = ioClient(url, { transports: ['websocket'] });
+    const b = ioClient(url, { transports: ['websocket'] });
+
+    cleanups.push(async () => {
+      a.disconnect();
+      b.disconnect();
+    });
+
+    await Promise.all([once(a, 'connect'), once(b, 'connect')]);
+
+    const createdState = once<{ room: RoomState; meUserId: string }>(a, 'v1:room.state');
+    a.emit('v1:room.create', { displayName: 'AA' });
+    const created = await createdState;
+
+    const joinedState = once<{ room: RoomState; meUserId: string }>(
+      b,
+      'v1:room.state',
+      (payload) => payload.room.roomCode === created.room.roomCode,
+    );
+    const lobbyUpdateAfterJoin = once<{ room: RoomState }>(
+      a,
+      'v1:room.state',
+      (payload) => payload.room.roomCode === created.room.roomCode && payload.room.players.length === 2,
+    );
+    b.emit('v1:room.join', { roomCode: created.room.roomCode, displayName: 'BB' });
+    const joined = await joinedState;
+    await lobbyUpdateAfterJoin;
+
+    const readyUpdate = once<{ room: RoomState }>(
+      a,
+      'v1:room.state',
+      (payload) =>
+        payload.room.players.some((player) => player.userId === joined.meUserId && player.ready),
+    );
+    b.emit('v1:lobby.ready', { ready: true });
+    await readyUpdate;
+
+    const errorPayload = once<{ code: string }>(a, 'v1:error');
+    a.emit('v1:lobby.kick', { userId: joined.meUserId });
+    const error = await errorPayload;
+    expect(error.code).toBe('INVALID_TARGET');
+  });
+
+  it('rejects lobby kick when caller is not host', async () => {
+    const repo = new RecordingPersistenceRepo();
+    const { url } = await boot(repo);
+
+    const a = ioClient(url, { transports: ['websocket'] });
+    const b = ioClient(url, { transports: ['websocket'] });
+
+    cleanups.push(async () => {
+      a.disconnect();
+      b.disconnect();
+    });
+
+    await Promise.all([once(a, 'connect'), once(b, 'connect')]);
+
+    const createdState = once<{ room: RoomState; meUserId: string }>(a, 'v1:room.state');
+    a.emit('v1:room.create', { displayName: 'AA' });
+    const created = await createdState;
+
+    const joinedState = once<{ room: RoomState }>(
+      b,
+      'v1:room.state',
+      (payload) => payload.room.roomCode === created.room.roomCode,
+    );
+    b.emit('v1:room.join', { roomCode: created.room.roomCode, displayName: 'BB' });
+    await joinedState;
+
+    const errorPayload = once<{ code: string }>(b, 'v1:error');
+    b.emit('v1:lobby.kick', { userId: created.meUserId });
+    const error = await errorPayload;
+    expect(error.code).toBe('NOT_HOST');
+  });
+
+  it('rejects host kicking self', async () => {
+    const repo = new RecordingPersistenceRepo();
+    const { url } = await boot(repo);
+
+    const a = ioClient(url, { transports: ['websocket'] });
+    cleanups.push(async () => {
+      a.disconnect();
+    });
+
+    await once(a, 'connect');
+    const createdState = once<{ room: RoomState; meUserId: string }>(a, 'v1:room.state');
+    a.emit('v1:room.create', { displayName: 'AA' });
+    const created = await createdState;
+
+    const errorPayload = once<{ code: string }>(a, 'v1:error');
+    a.emit('v1:lobby.kick', { userId: created.meUserId });
+    const error = await errorPayload;
+    expect(error.code).toBe('INVALID_TARGET');
+  });
+
   it('broadcasts first flip progression state to all players', async () => {
     const repo = new RecordingPersistenceRepo();
     const { store, url } = await boot(repo);
@@ -265,8 +434,8 @@ describe('persistence integration', () => {
       throw new Error('players not found');
     }
 
-    host.hand = ['CAT'];
-    guest.hand = ['PIZZA'];
+    host.hand = ['CAT', 'CHEESE'];
+    guest.hand = ['PIZZA', 'GOAT'];
     room.gameState.currentTurnSeat = host.seatIndex;
     room.gameState.chantIndex = 0;
     room.gameState.pile = [];
@@ -301,6 +470,523 @@ describe('persistence integration', () => {
     expect(stateB.snapshot.currentTurnSeat).toBe(guest.seatIndex);
     expect(stateA.snapshot.slapWindow.active).toBe(false);
     expect(stateB.snapshot.slapWindow.active).toBe(false);
+  });
+
+  it('opens SAME_CARD slap window for consecutive equal normal cards', async () => {
+    const repo = new RecordingPersistenceRepo();
+    const { store, url } = await boot(repo);
+
+    const a = ioClient(url, { transports: ['websocket'] });
+    const b = ioClient(url, { transports: ['websocket'] });
+
+    cleanups.push(async () => {
+      a.disconnect();
+      b.disconnect();
+    });
+
+    await Promise.all([once(a, 'connect'), once(b, 'connect')]);
+
+    const aRoomState = once<{ room: RoomState; meUserId: string }>(a, 'v1:room.state');
+    a.emit('v1:room.create', { displayName: 'AA' });
+    const created = await aRoomState;
+
+    const bRoomState = once<{ room: RoomState; meUserId: string }>(
+      b,
+      'v1:room.state',
+      (payload) => payload.room.roomCode === created.room.roomCode,
+    );
+    b.emit('v1:room.join', { roomCode: created.room.roomCode, displayName: 'BB' });
+    const joined = await bRoomState;
+
+    const aInGameRoom = once<{ room: RoomState }>(a, 'v1:room.state', (payload) => payload.room.status === 'IN_GAME');
+    const bInGameRoom = once<{ room: RoomState }>(b, 'v1:room.state', (payload) => payload.room.status === 'IN_GAME');
+    a.emit('v1:lobby.start', {});
+    await Promise.all([aInGameRoom, bInGameRoom]);
+
+    const room = await store.getRoomByCode(created.room.roomCode);
+    expect(room?.gameState).toBeTruthy();
+    if (!room?.gameState) {
+      throw new Error('missing game state');
+    }
+
+    const host = room.gameState.players.find((player) => player.userId === created.meUserId);
+    const guest = room.gameState.players.find((player) => player.userId === joined.meUserId);
+    if (!host || !guest) {
+      throw new Error('players not found');
+    }
+
+    host.hand = ['GOAT', 'CAT'];
+    guest.hand = ['GOAT', 'PIZZA'];
+    room.gameState.currentTurnSeat = host.seatIndex;
+    room.gameState.chantIndex = 0;
+    room.gameState.pile = [];
+    room.gameState.pileCount = 0;
+    room.gameState.slapWindow = {
+      active: false,
+      receivedSlapsCount: 0,
+      attempts: [],
+      resolved: false,
+    };
+    await store.saveRoom(room);
+
+    const noWindowAfterFirstFlip = once<{ snapshot: { currentTurnSeat: number; slapWindow: { active: boolean } } }>(
+      a,
+      'v1:game.state',
+      (payload) => payload.snapshot.currentTurnSeat === guest.seatIndex && payload.snapshot.slapWindow.active === false,
+    );
+    a.emit('v1:game.flip', { clientSeq: 1, clientTime: Date.now() });
+    await noWindowAfterFirstFlip;
+
+    const sameCardOpenA = once<{ reason: string }>(a, 'v1:game.slapWindowOpen', (payload) => payload.reason === 'SAME_CARD');
+    const sameCardOpenB = once<{ reason: string }>(b, 'v1:game.slapWindowOpen', (payload) => payload.reason === 'SAME_CARD');
+    const sameCardStateA = once<{ snapshot: { currentTurnSeat: number; slapWindow: { active: boolean; reason?: string } } }>(
+      a,
+      'v1:game.state',
+      (payload) =>
+        payload.snapshot.currentTurnSeat === guest.seatIndex &&
+        payload.snapshot.slapWindow.active &&
+        payload.snapshot.slapWindow.reason === 'SAME_CARD',
+    );
+    const sameCardStateB = once<{ snapshot: { currentTurnSeat: number; slapWindow: { active: boolean; reason?: string } } }>(
+      b,
+      'v1:game.state',
+      (payload) =>
+        payload.snapshot.currentTurnSeat === guest.seatIndex &&
+        payload.snapshot.slapWindow.active &&
+        payload.snapshot.slapWindow.reason === 'SAME_CARD',
+    );
+
+    b.emit('v1:game.flip', { clientSeq: 1, clientTime: Date.now() });
+    await Promise.all([sameCardOpenA, sameCardOpenB, sameCardStateA, sameCardStateB]);
+  });
+
+  it('keeps same-card window active until all players slap, blocking flip attempts', async () => {
+    const repo = new RecordingPersistenceRepo();
+    const { store, url } = await boot(repo);
+
+    const a = ioClient(url, { transports: ['websocket'] });
+    const b = ioClient(url, { transports: ['websocket'] });
+
+    cleanups.push(async () => {
+      a.disconnect();
+      b.disconnect();
+    });
+
+    await Promise.all([once(a, 'connect'), once(b, 'connect')]);
+
+    const aRoomState = once<{ room: RoomState; meUserId: string }>(a, 'v1:room.state');
+    a.emit('v1:room.create', { displayName: 'AA' });
+    const created = await aRoomState;
+
+    const bRoomState = once<{ room: RoomState; meUserId: string }>(
+      b,
+      'v1:room.state',
+      (payload) => payload.room.roomCode === created.room.roomCode,
+    );
+    b.emit('v1:room.join', { roomCode: created.room.roomCode, displayName: 'BB' });
+    const joined = await bRoomState;
+
+    const aInGameRoom = once<{ room: RoomState }>(a, 'v1:room.state', (payload) => payload.room.status === 'IN_GAME');
+    const bInGameRoom = once<{ room: RoomState }>(b, 'v1:room.state', (payload) => payload.room.status === 'IN_GAME');
+    a.emit('v1:lobby.start', {});
+    await Promise.all([aInGameRoom, bInGameRoom]);
+
+    const room = await store.getRoomByCode(created.room.roomCode);
+    expect(room?.gameState).toBeTruthy();
+    if (!room?.gameState) {
+      throw new Error('missing game state');
+    }
+
+    const host = room.gameState.players.find((player) => player.userId === created.meUserId);
+    const guest = room.gameState.players.find((player) => player.userId === joined.meUserId);
+    if (!host || !guest) {
+      throw new Error('players not found');
+    }
+
+    host.hand = ['GOAT', 'CAT'];
+    guest.hand = ['GOAT', 'PIZZA'];
+    room.gameState.currentTurnSeat = host.seatIndex;
+    room.gameState.chantIndex = 0;
+    room.gameState.pile = [];
+    room.gameState.pileCount = 0;
+    room.gameState.slapWindow = {
+      active: false,
+      receivedSlapsCount: 0,
+      attempts: [],
+      resolved: false,
+    };
+    await store.saveRoom(room);
+
+    const noWindowAfterFirstFlip = once<{ snapshot: { currentTurnSeat: number; slapWindow: { active: boolean } } }>(
+      a,
+      'v1:game.state',
+      (payload) => payload.snapshot.currentTurnSeat === guest.seatIndex && payload.snapshot.slapWindow.active === false,
+    );
+    a.emit('v1:game.flip', { clientSeq: 1, clientTime: Date.now() });
+    await noWindowAfterFirstFlip;
+
+    const sameCardOpen = once<{ reason: string }>(a, 'v1:game.slapWindowOpen', (payload) => payload.reason === 'SAME_CARD');
+    b.emit('v1:game.flip', { clientSeq: 1, clientTime: Date.now() });
+    await sameCardOpen;
+
+    await wait(200);
+    await expectNoEvent<{ reason: string }>(a, 'v1:game.slapResult', 120);
+
+    const blockedFlipError = once<{ code: string }>(
+      a,
+      'v1:error',
+      (payload) => payload.code === 'SLAP_WINDOW_ACTIVE',
+    );
+    a.emit('v1:game.flip', { clientSeq: 2, clientTime: Date.now() });
+    await blockedFlipError;
+
+    await expectNoEvent<{ userId: string; type: string }>(a, 'v1:penalty', 250);
+
+    const slapResult = once<{ loserUserId: string; reason: string }>(
+      a,
+      'v1:game.slapResult',
+      (payload) => payload.reason === 'LAST_SLAPPER',
+    );
+    const stateAfterResolve = once<{ snapshot: { slapWindow: { active: boolean }; currentTurnSeat: number } }>(
+      a,
+      'v1:game.state',
+      (payload) => !payload.snapshot.slapWindow.active,
+    );
+
+    const eventId = (await store.getRoomByCode(created.room.roomCode))?.gameState?.slapWindow.eventId;
+    if (!eventId) {
+      throw new Error('missing same-card event id');
+    }
+
+    b.emit('v1:game.slap', {
+      eventId,
+      clientSeq: 2,
+      clientTime: Date.now(),
+      offsetMs: 0,
+      rttMs: 10,
+    });
+    a.emit('v1:game.slap', {
+      eventId,
+      clientSeq: 3,
+      clientTime: Date.now(),
+      offsetMs: 0,
+      rttMs: 10,
+    });
+
+    const resolved = await slapResult;
+    expect([created.meUserId, joined.meUserId]).toContain(resolved.loserUserId);
+    const resolvedState = await stateAfterResolve;
+    expect(resolvedState.snapshot.slapWindow.active).toBe(false);
+  });
+
+  it('ignores duplicate late slap packet for just-resolved slap event', async () => {
+    const repo = new RecordingPersistenceRepo();
+    const { store, url } = await boot(repo);
+
+    const a = ioClient(url, { transports: ['websocket'] });
+    const b = ioClient(url, { transports: ['websocket'] });
+
+    cleanups.push(async () => {
+      a.disconnect();
+      b.disconnect();
+    });
+
+    await Promise.all([once(a, 'connect'), once(b, 'connect')]);
+
+    const aRoomState = once<{ room: RoomState; meUserId: string }>(a, 'v1:room.state');
+    a.emit('v1:room.create', { displayName: 'AA' });
+    const created = await aRoomState;
+
+    const bRoomState = once<{ room: RoomState; meUserId: string }>(
+      b,
+      'v1:room.state',
+      (payload) => payload.room.roomCode === created.room.roomCode,
+    );
+    b.emit('v1:room.join', { roomCode: created.room.roomCode, displayName: 'BB' });
+    const joined = await bRoomState;
+
+    const aInGameRoom = once<{ room: RoomState }>(a, 'v1:room.state', (payload) => payload.room.status === 'IN_GAME');
+    const bInGameRoom = once<{ room: RoomState }>(b, 'v1:room.state', (payload) => payload.room.status === 'IN_GAME');
+    a.emit('v1:lobby.start', {});
+    await Promise.all([aInGameRoom, bInGameRoom]);
+
+    const room = await store.getRoomByCode(created.room.roomCode);
+    expect(room?.gameState).toBeTruthy();
+    if (!room?.gameState) {
+      throw new Error('missing game state');
+    }
+
+    const host = room.gameState.players.find((player) => player.userId === created.meUserId);
+    const guest = room.gameState.players.find((player) => player.userId === joined.meUserId);
+    if (!host || !guest) {
+      throw new Error('players not found');
+    }
+
+    host.hand = ['TACO', 'GOAT'];
+    guest.hand = ['CAT', 'PIZZA'];
+    room.gameState.currentTurnSeat = host.seatIndex;
+    room.gameState.chantIndex = 0;
+    room.gameState.pile = [];
+    room.gameState.pileCount = 0;
+    room.gameState.slapWindow = {
+      active: false,
+      receivedSlapsCount: 0,
+      attempts: [],
+      resolved: false,
+    };
+    await store.saveRoom(room);
+
+    const slapOpen = once<{ eventId: string }>(a, 'v1:game.slapWindowOpen');
+    a.emit('v1:game.flip', { clientSeq: 1, clientTime: Date.now() });
+    const open = await slapOpen;
+
+    const slapResult = once<{ eventId: string }>(
+      a,
+      'v1:game.slapResult',
+      (payload) => payload.eventId === open.eventId,
+    );
+
+    a.emit('v1:game.slap', {
+      eventId: open.eventId,
+      clientSeq: 1,
+      clientTime: Date.now(),
+      offsetMs: 0,
+      rttMs: 10,
+    });
+    b.emit('v1:game.slap', {
+      eventId: open.eventId,
+      clientSeq: 1,
+      clientTime: Date.now(),
+      offsetMs: 0,
+      rttMs: 10,
+    });
+
+    await slapResult;
+
+    a.emit('v1:game.slap', {
+      eventId: open.eventId,
+      clientSeq: 2,
+      clientTime: Date.now(),
+      offsetMs: 0,
+      rttMs: 10,
+    });
+
+    await Promise.all([
+      expectNoEvent<{ type: string }>(a, 'v1:penalty', 350),
+      expectNoEvent<{ type: string }>(b, 'v1:penalty', 350),
+    ]);
+  });
+
+  it('finishes game immediately when flipper reaches zero cards', async () => {
+    const repo = new RecordingPersistenceRepo();
+    const { store, url } = await boot(repo);
+
+    const a = ioClient(url, { transports: ['websocket'] });
+    const b = ioClient(url, { transports: ['websocket'] });
+
+    cleanups.push(async () => {
+      a.disconnect();
+      b.disconnect();
+    });
+
+    await Promise.all([once(a, 'connect'), once(b, 'connect')]);
+
+    const aRoomState = once<{ room: RoomState; meUserId: string }>(a, 'v1:room.state');
+    a.emit('v1:room.create', { displayName: 'AA' });
+    const created = await aRoomState;
+
+    const bRoomState = once<{ room: RoomState; meUserId: string }>(
+      b,
+      'v1:room.state',
+      (payload) => payload.room.roomCode === created.room.roomCode,
+    );
+    b.emit('v1:room.join', { roomCode: created.room.roomCode, displayName: 'BB' });
+    const joined = await bRoomState;
+
+    const aInGameRoom = once<{ room: RoomState }>(a, 'v1:room.state', (payload) => payload.room.status === 'IN_GAME');
+    const bInGameRoom = once<{ room: RoomState }>(b, 'v1:room.state', (payload) => payload.room.status === 'IN_GAME');
+    a.emit('v1:lobby.start', {});
+    await Promise.all([aInGameRoom, bInGameRoom]);
+
+    const room = await store.getRoomByCode(created.room.roomCode);
+    expect(room?.gameState).toBeTruthy();
+    if (!room?.gameState) {
+      throw new Error('missing game state');
+    }
+
+    const host = room.gameState.players.find((player) => player.userId === created.meUserId);
+    const guest = room.gameState.players.find((player) => player.userId === joined.meUserId);
+    if (!host || !guest) {
+      throw new Error('players not found');
+    }
+
+    host.hand = ['CAT'];
+    guest.hand = ['GOAT'];
+    room.gameState.currentTurnSeat = host.seatIndex;
+    room.gameState.chantIndex = 0;
+    room.gameState.pile = [];
+    room.gameState.pileCount = 0;
+    room.gameState.slapWindow = {
+      active: false,
+      receivedSlapsCount: 0,
+      attempts: [],
+      resolved: false,
+    };
+    await store.saveRoom(room);
+
+    const finishedA = once<{ snapshot: { status: string; winnerUserId?: string } }>(
+      a,
+      'v1:game.state',
+      (payload) => payload.snapshot.status === 'FINISHED',
+    );
+    const finishedB = once<{ snapshot: { status: string; winnerUserId?: string } }>(
+      b,
+      'v1:game.state',
+      (payload) => payload.snapshot.status === 'FINISHED',
+    );
+    a.emit('v1:game.flip', { clientSeq: 1, clientTime: Date.now() });
+
+    const [stateA, stateB] = await Promise.all([finishedA, finishedB]);
+    expect(stateA.snapshot.winnerUserId).toBe(created.meUserId);
+    expect(stateB.snapshot.winnerUserId).toBe(created.meUserId);
+  });
+
+  it('allows any player to return a finished game to lobby', async () => {
+    const repo = new RecordingPersistenceRepo();
+    const { store, url } = await boot(repo);
+
+    const a = ioClient(url, { transports: ['websocket'] });
+    const b = ioClient(url, { transports: ['websocket'] });
+
+    cleanups.push(async () => {
+      a.disconnect();
+      b.disconnect();
+    });
+
+    await Promise.all([once(a, 'connect'), once(b, 'connect')]);
+
+    const aRoomState = once<{ room: RoomState; meUserId: string }>(a, 'v1:room.state');
+    a.emit('v1:room.create', { displayName: 'AA' });
+    const created = await aRoomState;
+
+    const bRoomState = once<{ room: RoomState; meUserId: string }>(
+      b,
+      'v1:room.state',
+      (payload) => payload.room.roomCode === created.room.roomCode,
+    );
+    b.emit('v1:room.join', { roomCode: created.room.roomCode, displayName: 'BB' });
+    const joined = await bRoomState;
+
+    const aInGameRoom = once<{ room: RoomState }>(a, 'v1:room.state', (payload) => payload.room.status === 'IN_GAME');
+    const bInGameRoom = once<{ room: RoomState }>(b, 'v1:room.state', (payload) => payload.room.status === 'IN_GAME');
+    a.emit('v1:lobby.start', {});
+    await Promise.all([aInGameRoom, bInGameRoom]);
+
+    const room = await store.getRoomByCode(created.room.roomCode);
+    expect(room?.gameState).toBeTruthy();
+    if (!room?.gameState) {
+      throw new Error('missing game state');
+    }
+
+    const host = room.gameState.players.find((player) => player.userId === created.meUserId);
+    const guest = room.gameState.players.find((player) => player.userId === joined.meUserId);
+    if (!host || !guest) {
+      throw new Error('players not found');
+    }
+
+    host.hand = ['CAT'];
+    guest.hand = ['GOAT'];
+    room.gameState.currentTurnSeat = host.seatIndex;
+    room.gameState.chantIndex = 0;
+    room.gameState.pile = [];
+    room.gameState.pileCount = 0;
+    room.gameState.slapWindow = {
+      active: false,
+      receivedSlapsCount: 0,
+      attempts: [],
+      resolved: false,
+    };
+    await store.saveRoom(room);
+
+    const finishedA = once<{ snapshot: { status: string } }>(
+      a,
+      'v1:game.state',
+      (payload) => payload.snapshot.status === 'FINISHED',
+    );
+    const finishedB = once<{ snapshot: { status: string } }>(
+      b,
+      'v1:game.state',
+      (payload) => payload.snapshot.status === 'FINISHED',
+    );
+    a.emit('v1:game.flip', { clientSeq: 1, clientTime: Date.now() });
+    await Promise.all([finishedA, finishedB]);
+
+    const toLobbyA = once<{ room: RoomState }>(a, 'v1:room.state', (payload) => payload.room.status === 'LOBBY');
+    const toLobbyB = once<{ room: RoomState }>(b, 'v1:room.state', (payload) => payload.room.status === 'LOBBY');
+    b.emit('v1:game.stop', {});
+    await Promise.all([toLobbyA, toLobbyB]);
+  });
+
+  it('reattaches reconnected player to active game and emits fresh room/game state', async () => {
+    const repo = new RecordingPersistenceRepo();
+    const { url } = await boot(repo);
+
+    const a = ioClient(url, { transports: ['websocket'] });
+    const b = ioClient(url, { transports: ['websocket'] });
+
+    cleanups.push(async () => {
+      a.disconnect();
+      b.disconnect();
+    });
+
+    await Promise.all([once(a, 'connect'), once(b, 'connect')]);
+
+    const createdState = once<{ room: RoomState; meUserId: string }>(a, 'v1:room.state');
+    a.emit('v1:room.create', { displayName: 'AA' });
+    const created = await createdState;
+
+    const joinedState = once<{ room: RoomState; meUserId: string }>(
+      b,
+      'v1:room.state',
+      (payload) => payload.room.roomCode === created.room.roomCode,
+    );
+    const joined = await (async () => {
+      b.emit('v1:room.join', { roomCode: created.room.roomCode, displayName: 'BB' });
+      return joinedState;
+    })();
+
+    const aInGameRoom = once<{ room: RoomState }>(a, 'v1:room.state', (payload) => payload.room.status === 'IN_GAME');
+    const bInGameRoom = once<{ room: RoomState }>(b, 'v1:room.state', (payload) => payload.room.status === 'IN_GAME');
+    a.emit('v1:lobby.start', {});
+    await Promise.all([aInGameRoom, bInGameRoom]);
+
+    b.disconnect();
+
+    const bReconnect = ioClient(url, { transports: ['websocket'] });
+    cleanups.push(async () => {
+      bReconnect.disconnect();
+    });
+    await once(bReconnect, 'connect');
+
+    const rejoinRoomState = once<{ room: RoomState; meUserId: string }>(
+      bReconnect,
+      'v1:room.state',
+      (payload) => payload.room.roomCode === created.room.roomCode,
+    );
+    const rejoinGameState = once<{ snapshot: { status: string } }>(
+      bReconnect,
+      'v1:game.state',
+      (payload) => payload.snapshot.status === 'IN_GAME',
+    );
+    bReconnect.emit('v1:room.join', {
+      roomCode: created.room.roomCode,
+      displayName: 'BB',
+      userId: joined.meUserId,
+    });
+
+    const roomState = await rejoinRoomState;
+    await rejoinGameState;
+    expect(roomState.meUserId).toBe(joined.meUserId);
   });
 
   it('skips zero-card turn seat after flip in three-player flow', async () => {
@@ -358,7 +1044,7 @@ describe('persistence integration', () => {
       throw new Error('missing seat assignment');
     }
 
-    room.gameState.players[seatA]!.hand = ['CAT'];
+    room.gameState.players[seatA]!.hand = ['CAT', 'PIZZA'];
     room.gameState.players[seatB]!.hand = [];
     room.gameState.players[seatC]!.hand = ['GOAT', 'CHEESE'];
     room.gameState.currentTurnSeat = seatA;

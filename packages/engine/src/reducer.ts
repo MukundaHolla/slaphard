@@ -113,19 +113,24 @@ const resolveSlapWindowInternal = (state: GameState): { effects: EngineEffect[] 
   }
 
   const winnerUserId = resolveWinnerCondition(state, orderedUserIds);
+  const sameCardWindow = window.reason === 'SAME_CARD';
   const slapperSet = new Set(orderedUserIds);
   const nonSlappers = state.players
     .map((player) => player.userId)
     .filter((userId) => !slapperSet.has(userId));
-  const loserUserId =
-    nonSlappers.length > 0 ? nonSlappers[nonSlappers.length - 1]! : orderedUserIds[orderedUserIds.length - 1]!;
+  const loserUserId = sameCardWindow
+    ? orderedUserIds[orderedUserIds.length - 1]!
+    : nonSlappers.length > 0
+      ? nonSlappers[nonSlappers.length - 1]!
+      : orderedUserIds[orderedUserIds.length - 1]!;
+  const slapResultReason = sameCardWindow ? 'LAST_SLAPPER' : nonSlappers.length > 0 ? 'NON_SLAPPER' : 'LAST_SLAPPER';
 
   effects.push({
     type: 'SLAP_RESULT',
     eventId: windowEventId,
     orderedUserIds,
     loserUserId,
-    reason: nonSlappers.length > 0 ? 'NON_SLAPPER' : 'LAST_SLAPPER',
+    reason: slapResultReason,
   });
 
   if (winnerUserId) {
@@ -206,11 +211,19 @@ export const applyEvent = (state: GameState, event: EngineEvent, nowServerTime: 
   normalizeTurnSeat(next);
   const validation = validateEvent(next, event);
 
-  if (!validation.ok && event.type !== 'SLAP') {
+  if (!validation.ok && event.type !== 'SLAP' && event.type !== 'FLIP') {
     return {
       state,
       effects: [],
       error: engineError(validation.code, `invalid event: ${event.type}`),
+    };
+  }
+
+  if (event.type === 'SLAP' && !validation.ok) {
+    return {
+      state,
+      effects: [],
+      error: engineError(validation.code, 'slap rejected'),
     };
   }
 
@@ -233,6 +246,7 @@ export const applyEvent = (state: GameState, event: EngineEvent, nowServerTime: 
       };
     }
 
+    const previousRevealedCard = next.lastRevealed?.card;
     const chantWord = currentChantWord(next);
     next.pile.push(flipped);
     next.pileCount = next.pile.length;
@@ -245,12 +259,36 @@ export const applyEvent = (state: GameState, event: EngineEvent, nowServerTime: 
       atServerTime: nowServerTime,
     };
 
+    if ((current.hand.length ?? 0) === 0) {
+      next.status = 'FINISHED';
+      next.winnerUserId = current.userId;
+      resetSlapWindow(next);
+      next.chantIndex = (next.chantIndex + 1) % CHANT_ORDER.length;
+      next.version += 1;
+      return {
+        state: next,
+        effects: [
+          {
+            type: 'GAME_FINISHED',
+            winnerUserId: current.userId,
+          },
+        ],
+      };
+    }
+
+    const shouldOpenForAction = isActionCard(flipped);
+    const shouldOpenForSameCard =
+      CHANT_ORDER.includes(flipped as (typeof CHANT_ORDER)[number]) && previousRevealedCard === flipped;
     const shouldOpenForMatch = CHANT_ORDER.includes(flipped as (typeof CHANT_ORDER)[number]) && flipped === chantWord;
-    if (shouldOpenForMatch || isActionCard(flipped)) {
+    if (shouldOpenForMatch || shouldOpenForAction || shouldOpenForSameCard) {
       const eventId = deterministicEventId(next.nextSlapEventNonce);
       next.nextSlapEventNonce += 1;
 
-      const reason = shouldOpenForMatch ? ('MATCH' as const) : ('ACTION' as const);
+      const reason = shouldOpenForAction
+        ? ('ACTION' as const)
+        : shouldOpenForSameCard
+          ? ('SAME_CARD' as const)
+          : ('MATCH' as const);
       const slapWindowMs =
         reason === 'ACTION' ? next.config.actionSlapWindowMs : next.config.slapWindowMs;
       const nextSlapWindowBase = {
@@ -265,7 +303,7 @@ export const applyEvent = (state: GameState, event: EngineEvent, nowServerTime: 
         attempts: [],
         resolved: false,
       };
-      if (isActionCard(flipped)) {
+      if (shouldOpenForAction) {
         next.slapWindow = { ...nextSlapWindowBase, actionCard: flipped };
       } else {
         next.slapWindow = nextSlapWindowBase;
@@ -407,7 +445,14 @@ export const applyEvent = (state: GameState, event: EngineEvent, nowServerTime: 
     };
   }
 
-  if (activeWindow.receivedSlapsCount >= next.players.length) {
+  const requiredSlaps = activeWindow.reason === 'SAME_CARD'
+    ? Math.max(
+        1,
+        next.players.reduce((count, player) => count + (player.connected ? 1 : 0), 0),
+      )
+    : next.players.length;
+
+  if (activeWindow.receivedSlapsCount >= requiredSlaps) {
     const result = resolveSlapWindowInternal(next);
     return { state: next, effects: result.effects };
   }

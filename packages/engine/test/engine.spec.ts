@@ -167,10 +167,9 @@ describe('engine', () => {
     state = applyEvent(state, { type: 'FLIP', userId: 'u1' }, 1010).state;
     state = applyEvent(state, { type: 'FLIP', userId: 'u2' }, 1020).state;
     expect(state.slapWindow.reason).toBe('SAME_CARD');
-    const penalized = applyEvent(state, { type: 'FLIP', userId: 'u2' }, 1030);
-    expect(penalized.error).toBeUndefined();
-    expect(penalized.effects[0]).toMatchObject({ type: 'PENALTY', penaltyType: 'FALSE_SLAP', userId: 'u2' });
-    expect(penalized.state.slapWindow.active).toBe(false);
+    const blocked = applyEvent(state, { type: 'FLIP', userId: 'u2' }, 1030);
+    expect(blocked.error?.code).toBe('SLAP_WINDOW_ACTIVE');
+    expect(blocked.state.slapWindow.active).toBe(true);
   });
 
   it('ends game immediately when flipper reaches zero cards', () => {
@@ -224,6 +223,72 @@ describe('engine', () => {
     const resolved = applyEvent(state, { type: 'RESOLVE_SLAP_WINDOW' }, 4000);
     const slapResult = resolved.effects.find((effect) => effect.type === 'SLAP_RESULT');
     expect(slapResult).toMatchObject({ loserUserId: 'u1', reason: 'LAST_SLAPPER' });
+  });
+
+  it('waits for all connected players to slap before resolving same-card windows', () => {
+    let state = createInitialState({
+      players: players3,
+      deck: ['GOAT', 'GOAT', 'CHEESE', 'PIZZA', 'CAT', 'TACO'],
+      seed: 1,
+      shuffle: false,
+      nowServerTime: 1000,
+    });
+
+    state = applyEvent(state, { type: 'FLIP', userId: 'u1' }, 1010).state;
+    state = applyEvent(state, { type: 'FLIP', userId: 'u2' }, 1020).state;
+    expect(state.slapWindow.reason).toBe('SAME_CARD');
+    const eventId = state.slapWindow.eventId!;
+
+    const afterFirstSlap = applyEvent(
+      state,
+      {
+        type: 'SLAP',
+        userId: 'u1',
+        eventId,
+        clientSeq: 1,
+        clientTime: 1030,
+        offsetMs: 0,
+        rttMs: 10,
+      },
+      1030,
+    );
+    expect(afterFirstSlap.effects.find((effect) => effect.type === 'SLAP_RESULT')).toBeUndefined();
+    expect(afterFirstSlap.state.slapWindow.active).toBe(true);
+
+    const afterSecondSlap = applyEvent(
+      afterFirstSlap.state,
+      {
+        type: 'SLAP',
+        userId: 'u2',
+        eventId,
+        clientSeq: 2,
+        clientTime: 1040,
+        offsetMs: 0,
+        rttMs: 10,
+      },
+      1040,
+    );
+    expect(afterSecondSlap.effects.find((effect) => effect.type === 'SLAP_RESULT')).toBeUndefined();
+    expect(afterSecondSlap.state.slapWindow.active).toBe(true);
+
+    const afterThirdSlap = applyEvent(
+      afterSecondSlap.state,
+      {
+        type: 'SLAP',
+        userId: 'u3',
+        eventId,
+        clientSeq: 3,
+        clientTime: 1050,
+        offsetMs: 0,
+        rttMs: 10,
+      },
+      1050,
+    );
+    expect(afterThirdSlap.state.slapWindow.active).toBe(false);
+    expect(afterThirdSlap.effects.find((effect) => effect.type === 'SLAP_RESULT')).toMatchObject({
+      loserUserId: 'u3',
+      reason: 'LAST_SLAPPER',
+    });
   });
 
   it('applies immediate wrong-gesture penalty', () => {

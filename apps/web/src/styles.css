@@ -214,6 +214,19 @@ input {
   padding-bottom: 0.3rem;
 }
 
+.player-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.btn.lobby-kick {
+  min-height: 30px;
+  padding: 0.28rem 0.55rem;
+  font-size: 0.75rem;
+}
+
 .game-shell {
   height: 100dvh;
   display: grid;
@@ -315,6 +328,60 @@ input {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.4rem;
+}
+
+.action-reference {
+  border: 2px dashed var(--ink);
+  border-radius: 12px;
+  background: #fff;
+  padding: 0.4rem 0.5rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.action-reference p {
+  font-size: 0.7rem;
+  font-weight: 700;
+  opacity: 0.75;
+}
+
+.action-reference-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.35rem;
+}
+
+.action-reference-chip {
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+  padding: 0.22rem 0.35rem;
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  background: #fff7e8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.holders-micro {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+}
+
+.holders-chip {
+  border: 1.5px solid var(--ink);
+  border-radius: 999px;
+  padding: 0.08rem 0.35rem;
+  background: #fff;
+  font-size: 0.58rem;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.holders-chip.me {
+  background: #fff7e8;
 }
 
 .stat-pill {
@@ -602,6 +669,33 @@ input {
   .mini-stats {
     grid-template-columns: 1fr;
     gap: 0.3rem;
+  }
+
+  .action-reference {
+    padding: 0.32rem 0.4rem;
+    gap: 0.25rem;
+  }
+
+  .action-reference p {
+    font-size: 0.62rem;
+  }
+
+  .action-reference-grid {
+    gap: 0.25rem;
+  }
+
+  .action-reference-chip {
+    font-size: 0.64rem;
+    padding: 0.16rem 0.24rem;
+  }
+
+  .holders-micro {
+    gap: 0.2rem;
+  }
+
+  .holders-chip {
+    font-size: 0.52rem;
+    padding: 0.06rem 0.24rem;
   }
 
   .stat-pill {

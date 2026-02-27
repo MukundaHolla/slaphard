@@ -495,7 +495,9 @@ export const App = () => {
             ))}
           </ul>
           <div className="row">
-            {isHost ? <button className="btn primary" onClick={() => apiRef.current?.stopGame()}>Return to Lobby</button> : null}
+            <button className="btn primary" onClick={() => apiRef.current?.stopGame()}>
+              Return to Lobby
+            </button>
             <button className="btn danger" onClick={leaveToHome}>
               Back Home
             </button>
@@ -597,6 +599,17 @@ export const App = () => {
             </div>
           </section>
 
+          <section className="holders-micro" aria-label="Card holders">
+            {gameState.players.map((player) => (
+              <span
+                key={player.userId}
+                className={player.userId === meUserId ? 'holders-chip me' : 'holders-chip'}
+              >
+                {player.displayName}: {player.handCount}
+              </span>
+            ))}
+          </section>
+
           <section className="mini-stats">
             <div className="stat-pill">
               <span className="stat-label">Your Hand</span>
@@ -648,6 +661,9 @@ export const App = () => {
             {!slapActive ? <p className="muted">No slap window open. Slapping now is a false slap penalty.</p> : null}
             {slapActive && submittedSlapEventId === gameState.slapWindow.eventId ? (
               <p className="muted">You already slapped this event. Extra slaps are ignored.</p>
+            ) : null}
+            {slapActive && gameState.slapWindow.reason === 'SAME_CARD' ? (
+              <p className="muted">Same card round: waiting for every connected player to slap.</p>
             ) : null}
             {isActionWindow && !selectedGesture ? (
               <p className="muted">No action selected. Slapping now will count as wrong gesture.</p>

@@ -427,7 +427,7 @@ export class GameService {
       if (room.status === 'LOBBY') {
         throw new ServiceError('NOT_IN_GAME', 'room is already in lobby');
       }
-      if (room.hostUserId !== userId) {
+      if (room.status === 'IN_GAME' && room.hostUserId !== userId) {
         throw new ServiceError('NOT_HOST', 'only host can stop the game');
       }
 
@@ -829,6 +829,10 @@ export class GameService {
 
     const timers: RoomTimers = { generation };
     if (room.gameState.slapWindow.active && !room.gameState.slapWindow.resolved) {
+      if (room.gameState.slapWindow.reason === 'SAME_CARD') {
+        this.timersByRoomId.set(room.roomId, timers);
+        return;
+      }
       const deadline = room.gameState.slapWindow.deadlineServerTime ?? Date.now();
       const delay = Math.max(0, deadline - Date.now());
       timers.slapTimer = setTimeout(() => {
@@ -858,6 +862,9 @@ export class GameService {
       }
       const room = await this.roomStore.getRoomById(roomId);
       if (!room || !room.gameState || !room.gameState.slapWindow.active || room.status !== 'IN_GAME') {
+        return;
+      }
+      if (room.gameState.slapWindow.reason === 'SAME_CARD') {
         return;
       }
 
