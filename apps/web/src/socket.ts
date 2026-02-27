@@ -8,7 +8,7 @@ import {
   type ServerEventPayload,
 } from '@slaphard/shared';
 import { playCheerSound, playSadSound } from './audio';
-import { useAppStore } from './store';
+import { getPersistedIdentity, useAppStore } from './store';
 
 const serverUrl = import.meta.env.VITE_SERVER_URL ?? 'http://localhost:3001';
 
@@ -26,6 +26,7 @@ export interface SocketApi {
   joinRoom: (roomCode: string, displayName: string, userId?: string) => void;
   leaveRoom: () => void;
   setReady: (ready: boolean) => void;
+  kickFromLobby: (userId: string) => void;
   startGame: () => void;
   stopGame: () => void;
   flip: () => void;
@@ -46,10 +47,27 @@ export const createSocketApi = (): SocketApi => {
   const socket = io(serverUrl, {
     transports: ['websocket'],
   });
+  const OUTCOME_SOUND_COALESCE_MS = 250;
+  let lastSoundedSlapResultEventId: string | undefined;
+  let lastOutcomeSoundAt = 0;
+  let lastPenaltySoundSignature: string | undefined;
+  let lastPenaltySoundAt = 0;
 
   socket.on('connect', () => {
-    useAppStore.getState().setSocketStatus('connected');
-    useAppStore.getState().pushFeed('connected');
+    const store = useAppStore.getState();
+    store.setSocketStatus('connected');
+    store.pushFeed('connected');
+    const persisted = getPersistedIdentity();
+    if (persisted.roomCode && persisted.displayName) {
+      store.setRejoinState('attempting');
+      emitValidated(socket, 'v1:room.join', {
+        roomCode: persisted.roomCode.toUpperCase(),
+        displayName: persisted.displayName,
+        userId: persisted.userId,
+      });
+      return;
+    }
+    store.setRejoinState('idle');
   });
 
   socket.on('disconnect', () => {
@@ -62,7 +80,18 @@ export const createSocketApi = (): SocketApi => {
     if (!data) {
       return;
     }
-    useAppStore.getState().setRoomState(data.room, data.meUserId);
+    const store = useAppStore.getState();
+    store.setRoomState(data.room, data.meUserId);
+  });
+
+  socket.on('v1:room.kicked', (payload) => {
+    const data = parseServerPayload('v1:room.kicked', payload);
+    if (!data) {
+      return;
+    }
+    const store = useAppStore.getState();
+    store.clearRoom();
+    store.pushFeed(`You were removed from lobby ${data.roomCode} by host.`);
   });
 
   socket.on('v1:game.state', (payload) => {
@@ -91,11 +120,12 @@ export const createSocketApi = (): SocketApi => {
     if (!data) {
       return;
     }
+    const reasonLabel = data.reason === 'SAME_CARD' ? 'same card' : data.reason.toLowerCase();
     useAppStore.getState().clearSlapSubmission();
     useAppStore
       .getState()
       .pushFeed(
-        `slap window open (${data.reason}${data.actionCard ? `: ${data.actionCard.toLowerCase()}` : ''})`,
+        `slap window open (${reasonLabel}${data.actionCard ? `: ${data.actionCard.toLowerCase()}` : ''})`,
       );
   });
 
@@ -106,18 +136,26 @@ export const createSocketApi = (): SocketApi => {
     }
     const me = useAppStore.getState().meUserId;
 
-    if (data.reason !== 'FIRST_VALID_SLAP_WIN' && data.reason !== 'NO_SLAPS') {
+    if (
+      lastSoundedSlapResultEventId !== data.eventId &&
+      data.reason !== 'FIRST_VALID_SLAP_WIN' &&
+      data.reason !== 'NO_SLAPS'
+    ) {
       if (me && me === data.loserUserId) {
         playSadSound();
       } else {
         playCheerSound();
       }
+      lastSoundedSlapResultEventId = data.eventId;
+      lastOutcomeSoundAt = Date.now();
     }
 
     const place = me ? data.orderedUserIds.findIndex((id: string) => id === me) : -1;
     const placeText = place >= 0 ? `${place + 1}${place === 0 ? 'st' : place === 1 ? 'nd' : 'th'}` : 'none';
-    useAppStore.getState().pushFeed(`slap result: you=${placeText}, loser=${data.loserUserId.slice(0, 6)}`);
-    useAppStore.getState().clearSlapSubmission();
+    const store = useAppStore.getState();
+    store.setLastCardTaker(data.loserUserId);
+    store.pushFeed(`slap result: you=${placeText}, loser=${data.loserUserId.slice(0, 6)}`);
+    store.clearSlapSubmission();
   });
 
   socket.on('v1:penalty', (payload) => {
@@ -127,14 +165,25 @@ export const createSocketApi = (): SocketApi => {
     }
     const me = useAppStore.getState().meUserId;
     const isIdlePenalty = data.type === 'TURN_TIMEOUT' || data.type === 'NO_SLAPS';
-    if (!isIdlePenalty) {
-      if (me && me === data.userId) {
-        playSadSound();
-      } else {
-        playCheerSound();
+    const signature = `${data.type}:${data.userId}:${data.pileTaken}`;
+    const now = Date.now();
+    const hasRecentOutcomeSound = now - lastOutcomeSoundAt < OUTCOME_SOUND_COALESCE_MS;
+    const isDuplicatePenaltySound =
+      signature === lastPenaltySoundSignature && now - lastPenaltySoundAt < 1500;
+    if (!isIdlePenalty && !hasRecentOutcomeSound) {
+      if (!isDuplicatePenaltySound) {
+        if (me && me === data.userId) {
+          playSadSound();
+        } else {
+          playCheerSound();
+        }
+        lastPenaltySoundSignature = signature;
+        lastPenaltySoundAt = now;
       }
     }
-    useAppStore.getState().pushFeed(`penalty: ${data.type} on ${data.userId.slice(0, 6)}`);
+    const store = useAppStore.getState();
+    store.setLastCardTaker(data.userId);
+    store.pushFeed(`penalty: ${data.type} on ${data.userId.slice(0, 6)}`);
   });
 
   socket.on('v1:pong', (payload) => {
@@ -150,7 +199,16 @@ export const createSocketApi = (): SocketApi => {
     if (!data) {
       return;
     }
-    useAppStore.getState().pushFeed(`error ${data.code}: ${data.message}`);
+    const store = useAppStore.getState();
+    if (
+      store.rejoinState === 'attempting' &&
+      (data.code === 'ROOM_NOT_FOUND' || data.code === 'NOT_IN_LOBBY')
+    ) {
+      store.clearRoom();
+      store.setRejoinState('failed', `Could not reconnect: ${data.message}`);
+      return;
+    }
+    store.pushFeed(`error ${data.code}: ${data.message}`);
   });
 
   return {
@@ -160,6 +218,7 @@ export const createSocketApi = (): SocketApi => {
       emitValidated(socket, 'v1:room.join', { roomCode: roomCode.toUpperCase(), displayName, userId }),
     leaveRoom: () => emitValidated(socket, 'v1:room.leave', {}),
     setReady: (ready: boolean) => emitValidated(socket, 'v1:lobby.ready', { ready }),
+    kickFromLobby: (userId: string) => emitValidated(socket, 'v1:lobby.kick', { userId }),
     startGame: () => emitValidated(socket, 'v1:lobby.start', {}),
     stopGame: () => emitValidated(socket, 'v1:game.stop', {}),
     flip: () => {

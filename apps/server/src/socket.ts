@@ -30,6 +30,12 @@ export const attachSocketHandlers = (io: Server, gameService: GameService, logge
       });
     });
 
+    socket.on('v1:lobby.kick', (payload) => {
+      void gameService.kickFromLobby(socket, payload).catch((error: unknown) => {
+        gameService.handleFailure(socket, error);
+      });
+    });
+
     socket.on('v1:lobby.start', () => {
       void gameService.startGame(socket).catch((error: unknown) => {
         gameService.handleFailure(socket, error);

@@ -6,7 +6,7 @@ export type ActionCard = (typeof ACTION_CARDS)[number];
 export type Card = NormalCard | ActionCard;
 export type Gesture = ActionCard;
 
-export type SlapWindowReason = 'MATCH' | 'ACTION';
+export type SlapWindowReason = 'MATCH' | 'ACTION' | 'SAME_CARD';
 export type GameStatus = 'LOBBY' | 'IN_GAME' | 'FINISHED';
 export type RoomStatus = GameStatus;
 

@@ -2,6 +2,7 @@ export const ERROR_CODES = [
   'ROOM_NOT_FOUND',
   'ROOM_FULL',
   'INVALID_NAME',
+  'INVALID_TARGET',
   'NOT_HOST',
   'NOT_IN_LOBBY',
   'NOT_IN_GAME',

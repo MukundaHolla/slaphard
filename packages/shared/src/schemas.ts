@@ -6,7 +6,7 @@ export const cardSchema = z.enum(ALL_CARDS);
 
 export const gestureSchema = z.enum(ACTION_CARDS);
 export const roomStatusSchema = z.enum(['LOBBY', 'IN_GAME', 'FINISHED']);
-export const slapReasonSchema = z.enum(['MATCH', 'ACTION']);
+export const slapReasonSchema = z.enum(['MATCH', 'ACTION', 'SAME_CARD']);
 
 export const displayNameSchema = z.string().trim().min(2).max(24);
 export const roomCodeSchema = z
@@ -80,6 +80,7 @@ export const clientEventsSchemas = {
   }),
   'v1:room.leave': z.object({}),
   'v1:lobby.ready': z.object({ ready: z.boolean() }),
+  'v1:lobby.kick': z.object({ userId: z.string().uuid() }),
   'v1:lobby.start': z.object({}),
   'v1:game.stop': z.object({}),
   'v1:game.flip': z.object({
@@ -101,6 +102,10 @@ export const serverEventsSchemas = {
   'v1:room.state': z.object({
     room: roomSchema,
     meUserId: z.string().uuid(),
+  }),
+  'v1:room.kicked': z.object({
+    roomCode: roomCodeSchema,
+    byUserId: z.string().uuid(),
   }),
   'v1:game.state': z.object({
     snapshot: gameStateViewSchema,
