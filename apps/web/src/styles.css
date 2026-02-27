@@ -365,23 +365,51 @@ input {
 }
 
 .holders-micro {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.28rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 0.25rem;
+}
+
+.current-player-micro {
+  font-size: 0.62rem;
+  font-weight: 700;
+  opacity: 0.8;
+}
+
+.current-player-micro strong {
+  font-weight: 900;
 }
 
 .holders-chip {
   border: 1.5px solid var(--ink);
-  border-radius: 999px;
-  padding: 0.08rem 0.35rem;
+  border-radius: 10px;
+  padding: 0.09rem 0.3rem;
   background: #fff;
   font-size: 0.58rem;
   line-height: 1.2;
-  white-space: nowrap;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.3rem;
 }
 
 .holders-chip.me {
   background: #fff7e8;
+}
+
+.holder-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.holder-count {
+  font-weight: 800;
+  font-size: 0.62rem;
+  line-height: 1;
+  flex: 0 0 auto;
 }
 
 .stat-pill {
@@ -690,12 +718,22 @@ input {
   }
 
   .holders-micro {
-    gap: 0.2rem;
+    grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
+    gap: 0.18rem;
+  }
+
+  .current-player-micro {
+    font-size: 0.56rem;
   }
 
   .holders-chip {
-    font-size: 0.52rem;
-    padding: 0.06rem 0.24rem;
+    font-size: 0.5rem;
+    padding: 0.06rem 0.2rem;
+    gap: 0.2rem;
+  }
+
+  .holder-count {
+    font-size: 0.54rem;
   }
 
   .stat-pill {

@@ -5,7 +5,7 @@ const SOUND_SPECS: Record<SoundKey, { path: string; volume: number }> = {
   flip: { path: '/sfx/flip.wav', volume: 0.55 },
   slap: { path: '/sfx/slap.wav', volume: 0.65 },
   penalty: { path: '/sfx/penalty.wav', volume: 0.6 },
-  win: { path: '/sfx/win.wav', volume: 0.65 },
+  win: { path: '/sfx/winning.wav', volume: 0.65 },
   sad: { path: '/sfx/sad.wav', volume: 0.62 },
   cheer: { path: '/sfx/cheer.wav', volume: 0.68 },
 };

@@ -599,13 +599,19 @@ export const App = () => {
             </div>
           </section>
 
+          <section className="current-player-micro" aria-live="polite">
+            Current Player: <strong>{currentTurnName}</strong>
+          </section>
+
           <section className="holders-micro" aria-label="Card holders">
             {gameState.players.map((player) => (
               <span
                 key={player.userId}
                 className={player.userId === meUserId ? 'holders-chip me' : 'holders-chip'}
+                title={`${player.displayName}: ${player.handCount}`}
               >
-                {player.displayName}: {player.handCount}
+                <span className="holder-name">{player.displayName}</span>
+                <span className="holder-count">{player.handCount}</span>
               </span>
             ))}
           </section>
@@ -664,6 +670,9 @@ export const App = () => {
             ) : null}
             {slapActive && gameState.slapWindow.reason === 'SAME_CARD' ? (
               <p className="muted">Same card round: waiting for every connected player to slap.</p>
+            ) : null}
+            {slapActive && gameState.slapWindow.reason === 'ACTION' && gameState.players.length >= 5 ? (
+              <p className="muted">Action round: waiting for all players to slap before next flip.</p>
             ) : null}
             {isActionWindow && !selectedGesture ? (
               <p className="muted">No action selected. Slapping now will count as wrong gesture.</p>

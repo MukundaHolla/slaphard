@@ -679,6 +679,171 @@ describe('persistence integration', () => {
     expect(resolvedState.snapshot.slapWindow.active).toBe(false);
   });
 
+  it('for five-player action windows, keeps flip blocked until all players slap', async () => {
+    const repo = new RecordingPersistenceRepo();
+    const { store, url } = await boot(repo);
+
+    const a = ioClient(url, { transports: ['websocket'] });
+    const b = ioClient(url, { transports: ['websocket'] });
+    const c = ioClient(url, { transports: ['websocket'] });
+    const d = ioClient(url, { transports: ['websocket'] });
+    const e = ioClient(url, { transports: ['websocket'] });
+
+    cleanups.push(async () => {
+      a.disconnect();
+      b.disconnect();
+      c.disconnect();
+      d.disconnect();
+      e.disconnect();
+    });
+
+    await Promise.all([once(a, 'connect'), once(b, 'connect'), once(c, 'connect'), once(d, 'connect'), once(e, 'connect')]);
+
+    const createdState = once<{ room: RoomState; meUserId: string }>(a, 'v1:room.state');
+    a.emit('v1:room.create', { displayName: 'AA' });
+    const created = await createdState;
+
+    const joinAndCapture = async (socket: Socket, displayName: string) => {
+      const roomState = once<{ room: RoomState; meUserId: string }>(
+        socket,
+        'v1:room.state',
+        (payload) => payload.room.roomCode === created.room.roomCode,
+      );
+      socket.emit('v1:room.join', { roomCode: created.room.roomCode, displayName });
+      return roomState;
+    };
+
+    const joinedB = await joinAndCapture(b, 'BB');
+    const joinedC = await joinAndCapture(c, 'CC');
+    const joinedD = await joinAndCapture(d, 'DD');
+    const joinedE = await joinAndCapture(e, 'EE');
+
+    const toInGame = [
+      once<{ room: RoomState }>(a, 'v1:room.state', (payload) => payload.room.status === 'IN_GAME'),
+      once<{ room: RoomState }>(b, 'v1:room.state', (payload) => payload.room.status === 'IN_GAME'),
+      once<{ room: RoomState }>(c, 'v1:room.state', (payload) => payload.room.status === 'IN_GAME'),
+      once<{ room: RoomState }>(d, 'v1:room.state', (payload) => payload.room.status === 'IN_GAME'),
+      once<{ room: RoomState }>(e, 'v1:room.state', (payload) => payload.room.status === 'IN_GAME'),
+    ];
+    a.emit('v1:lobby.start', {});
+    await Promise.all(toInGame);
+
+    const room = await store.getRoomByCode(created.room.roomCode);
+    expect(room?.gameState).toBeTruthy();
+    if (!room?.gameState) {
+      throw new Error('missing game state');
+    }
+
+    const seatA = room.gameState.players.find((player) => player.userId === created.meUserId)?.seatIndex;
+    const seatB = room.gameState.players.find((player) => player.userId === joinedB.meUserId)?.seatIndex;
+    const seatC = room.gameState.players.find((player) => player.userId === joinedC.meUserId)?.seatIndex;
+    const seatD = room.gameState.players.find((player) => player.userId === joinedD.meUserId)?.seatIndex;
+    const seatE = room.gameState.players.find((player) => player.userId === joinedE.meUserId)?.seatIndex;
+    if (
+      seatA === undefined ||
+      seatB === undefined ||
+      seatC === undefined ||
+      seatD === undefined ||
+      seatE === undefined
+    ) {
+      throw new Error('missing seat assignment');
+    }
+
+    room.gameState.players[seatA]!.hand = ['GORILLA', 'CAT'];
+    room.gameState.players[seatB]!.hand = ['TACO', 'PIZZA'];
+    room.gameState.players[seatC]!.hand = ['CAT', 'GOAT'];
+    room.gameState.players[seatD]!.hand = ['GOAT', 'CHEESE'];
+    room.gameState.players[seatE]!.hand = ['CHEESE', 'PIZZA'];
+    room.gameState.currentTurnSeat = seatA;
+    room.gameState.chantIndex = 0;
+    room.gameState.pile = [];
+    room.gameState.pileCount = 0;
+    room.gameState.config.actionSlapWindowMs = 120;
+    room.gameState.slapWindow = {
+      active: false,
+      receivedSlapsCount: 0,
+      attempts: [],
+      resolved: false,
+    };
+    await store.saveRoom(room);
+
+    const actionOpen = once<{ eventId: string; reason: string; actionCard?: string }>(
+      a,
+      'v1:game.slapWindowOpen',
+      (payload) => payload.reason === 'ACTION' && payload.actionCard === 'GORILLA',
+    );
+    a.emit('v1:game.flip', { clientSeq: 1, clientTime: Date.now() });
+    const open = await actionOpen;
+
+    await wait(240);
+    await expectNoEvent<{ reason: string }>(a, 'v1:game.slapResult', 200);
+    await expectNoEvent<{ type: string }>(a, 'v1:penalty', 200);
+
+    const blockedFlipError = once<{ code: string }>(b, 'v1:error', (payload) => payload.code === 'SLAP_WINDOW_ACTIVE');
+    b.emit('v1:game.flip', { clientSeq: 1, clientTime: Date.now() });
+    await blockedFlipError;
+
+    await wait(60);
+    const slapResult = once<{ loserUserId: string; reason: string; orderedUserIds: string[] }>(
+      a,
+      'v1:game.slapResult',
+      (payload) => payload.reason === 'LAST_SLAPPER',
+    );
+    const resolvedState = once<{ snapshot: { slapWindow: { active: boolean } } }>(
+      a,
+      'v1:game.state',
+      (payload) => !payload.snapshot.slapWindow.active,
+    );
+
+    b.emit('v1:game.slap', {
+      eventId: open.eventId,
+      gesture: 'GORILLA',
+      clientSeq: 2,
+      clientTime: Date.now(),
+      offsetMs: 0,
+      rttMs: 10,
+    });
+    c.emit('v1:game.slap', {
+      eventId: open.eventId,
+      gesture: 'GORILLA',
+      clientSeq: 1,
+      clientTime: Date.now(),
+      offsetMs: 0,
+      rttMs: 10,
+    });
+    d.emit('v1:game.slap', {
+      eventId: open.eventId,
+      gesture: 'GORILLA',
+      clientSeq: 1,
+      clientTime: Date.now(),
+      offsetMs: 0,
+      rttMs: 10,
+    });
+    e.emit('v1:game.slap', {
+      eventId: open.eventId,
+      gesture: 'GORILLA',
+      clientSeq: 1,
+      clientTime: Date.now(),
+      offsetMs: 0,
+      rttMs: 10,
+    });
+    await wait(60);
+    a.emit('v1:game.slap', {
+      eventId: open.eventId,
+      gesture: 'GORILLA',
+      clientSeq: 2,
+      clientTime: Date.now(),
+      offsetMs: 0,
+      rttMs: 10,
+    });
+
+    const result = await slapResult;
+    expect(result.loserUserId).toBe(created.meUserId);
+    expect(result.orderedUserIds.length).toBe(5);
+    const after = await resolvedState;
+    expect(after.snapshot.slapWindow.active).toBe(false);
+  });
+
   it('ignores duplicate late slap packet for just-resolved slap event', async () => {
     const repo = new RecordingPersistenceRepo();
     const { store, url } = await boot(repo);

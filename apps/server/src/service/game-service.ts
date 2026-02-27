@@ -829,7 +829,10 @@ export class GameService {
 
     const timers: RoomTimers = { generation };
     if (room.gameState.slapWindow.active && !room.gameState.slapWindow.resolved) {
-      if (room.gameState.slapWindow.reason === 'SAME_CARD') {
+      const requireAllSlapsBeforeResolve =
+        room.gameState.slapWindow.reason === 'SAME_CARD' ||
+        (room.gameState.slapWindow.reason === 'ACTION' && room.gameState.players.length >= 5);
+      if (requireAllSlapsBeforeResolve) {
         this.timersByRoomId.set(room.roomId, timers);
         return;
       }
@@ -864,7 +867,10 @@ export class GameService {
       if (!room || !room.gameState || !room.gameState.slapWindow.active || room.status !== 'IN_GAME') {
         return;
       }
-      if (room.gameState.slapWindow.reason === 'SAME_CARD') {
+      const requireAllSlapsBeforeResolve =
+        room.gameState.slapWindow.reason === 'SAME_CARD' ||
+        (room.gameState.slapWindow.reason === 'ACTION' && room.gameState.players.length >= 5);
+      if (requireAllSlapsBeforeResolve) {
         return;
       }
 
