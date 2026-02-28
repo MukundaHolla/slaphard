@@ -62,7 +62,18 @@ const resolveSlapWindowInternal = (state: GameState): { effects: EngineEffect[] 
   if (!windowEventId) {
     return { effects };
   }
+  const sameCardWindow = window.reason === 'SAME_CARD';
   const validAttempts = [...window.attempts].sort((a, b) => {
+    if (sameCardWindow) {
+      if (a.receivedAtServerTime !== b.receivedAtServerTime) {
+        return a.receivedAtServerTime - b.receivedAtServerTime;
+      }
+      if (a.clientSeq !== b.clientSeq) {
+        return a.clientSeq - b.clientSeq;
+      }
+      return a.userId.localeCompare(b.userId);
+    }
+
     const r1 = resolveReactionMs(
       a.clientTime,
       a.offsetMs,
@@ -81,7 +92,13 @@ const resolveSlapWindowInternal = (state: GameState): { effects: EngineEffect[] 
     if (r1 !== r2) {
       return r1 - r2;
     }
-    return a.receivedAtServerTime - b.receivedAtServerTime;
+    if (a.receivedAtServerTime !== b.receivedAtServerTime) {
+      return a.receivedAtServerTime - b.receivedAtServerTime;
+    }
+    if (a.clientSeq !== b.clientSeq) {
+      return a.clientSeq - b.clientSeq;
+    }
+    return a.userId.localeCompare(b.userId);
   });
 
   const orderedUserIds = validAttempts.map((attempt) => attempt.userId);
@@ -114,7 +131,6 @@ const resolveSlapWindowInternal = (state: GameState): { effects: EngineEffect[] 
   }
 
   const winnerUserId = resolveWinnerCondition(state, orderedUserIds);
-  const sameCardWindow = window.reason === 'SAME_CARD';
   const slapperSet = new Set(orderedUserIds);
   const nonSlappers = state.players
     .map((player) => player.userId)

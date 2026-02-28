@@ -154,7 +154,9 @@ export const createSocketApi = (): SocketApi => {
     const place = me ? data.orderedUserIds.findIndex((id: string) => id === me) : -1;
     const placeText = place >= 0 ? `${place + 1}${place === 0 ? 'st' : place === 1 ? 'nd' : 'th'}` : 'none';
     const store = useAppStore.getState();
-    store.setLastCardTaker(data.loserUserId, data.pileTaken);
+    if (data.pileTaken > 0) {
+      store.setLastCardTaker(data.loserUserId, data.pileTaken);
+    }
     store.pushFeed(`slap result: you=${placeText}, loser=${data.loserUserId.slice(0, 6)}`);
     store.clearSlapSubmission();
   });
@@ -183,7 +185,9 @@ export const createSocketApi = (): SocketApi => {
       }
     }
     const store = useAppStore.getState();
-    store.setLastCardTaker(data.userId, data.pileTaken);
+    if (data.pileTaken > 0) {
+      store.setLastCardTaker(data.userId, data.pileTaken);
+    }
     store.pushFeed(`penalty: ${data.type} on ${data.userId.slice(0, 6)}`);
   });
 

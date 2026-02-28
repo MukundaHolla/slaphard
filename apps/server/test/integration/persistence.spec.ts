@@ -628,6 +628,7 @@ describe('persistence integration', () => {
     const sameCardOpen = once<{ reason: string }>(a, 'v1:game.slapWindowOpen', (payload) => payload.reason === 'SAME_CARD');
     b.emit('v1:game.flip', { clientSeq: 1, clientTime: Date.now() });
     await sameCardOpen;
+    await wait(80);
 
     await wait(200);
     await expectNoEvent<{ reason: string }>(a, 'v1:game.slapResult', 120);
@@ -642,7 +643,7 @@ describe('persistence integration', () => {
 
     await expectNoEvent<{ userId: string; type: string }>(a, 'v1:penalty', 250);
 
-    const slapResult = once<{ loserUserId: string; reason: string }>(
+    const slapResult = once<{ loserUserId: string; orderedUserIds: string[]; reason: string }>(
       a,
       'v1:game.slapResult',
       (payload) => payload.reason === 'LAST_SLAPPER',
@@ -661,20 +662,21 @@ describe('persistence integration', () => {
     b.emit('v1:game.slap', {
       eventId,
       clientSeq: 2,
-      clientTime: Date.now(),
-      offsetMs: 0,
+      clientTime: 5000,
+      offsetMs: 900,
       rttMs: 10,
     });
     a.emit('v1:game.slap', {
       eventId,
       clientSeq: 3,
-      clientTime: Date.now(),
-      offsetMs: 0,
+      clientTime: 10,
+      offsetMs: -800,
       rttMs: 10,
     });
 
     const resolved = await slapResult;
-    expect([created.meUserId, joined.meUserId]).toContain(resolved.loserUserId);
+    expect(resolved.orderedUserIds).toEqual([joined.meUserId, created.meUserId]);
+    expect(resolved.loserUserId).toBe(created.meUserId);
     const resolvedState = await stateAfterResolve;
     expect(resolvedState.snapshot.slapWindow.active).toBe(false);
   });

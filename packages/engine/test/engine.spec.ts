@@ -291,6 +291,57 @@ describe('engine', () => {
     });
   });
 
+  it('orders same-card slaps by server arrival under conflicting client offsets', () => {
+    let state = createInitialState({
+      players,
+      deck: ['GOAT', 'GOAT', 'CHEESE', 'PIZZA'],
+      seed: 1,
+      shuffle: false,
+      nowServerTime: 1000,
+    });
+
+    state = applyEvent(state, { type: 'FLIP', userId: 'u1' }, 1010).state;
+    state = applyEvent(state, { type: 'FLIP', userId: 'u2' }, 1020).state;
+    expect(state.slapWindow.reason).toBe('SAME_CARD');
+    const eventId = state.slapWindow.eventId!;
+
+    const firstArrival = applyEvent(
+      state,
+      {
+        type: 'SLAP',
+        userId: 'u1',
+        eventId,
+        clientSeq: 1,
+        clientTime: 5000,
+        offsetMs: 900,
+        rttMs: 10,
+      },
+      1030,
+    );
+    expect(firstArrival.effects.find((effect) => effect.type === 'SLAP_RESULT')).toBeUndefined();
+
+    const resolved = applyEvent(
+      firstArrival.state,
+      {
+        type: 'SLAP',
+        userId: 'u2',
+        eventId,
+        clientSeq: 1,
+        clientTime: 10,
+        offsetMs: -800,
+        rttMs: 10,
+      },
+      1040,
+    );
+
+    const slapResult = resolved.effects.find((effect) => effect.type === 'SLAP_RESULT');
+    expect(slapResult).toMatchObject({
+      orderedUserIds: ['u1', 'u2'],
+      loserUserId: 'u2',
+      reason: 'LAST_SLAPPER',
+    });
+  });
+
   it('waits for all connected players to slap before resolving action windows', () => {
     let state = createInitialState({
       players: players3,
